@@ -16,7 +16,7 @@ ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
 FOOTBALL_API_BASE_URL = 'https://v3.football.api-sports.io'
 
 # Интервал проверки событий (в секундах)
-CHECK_INTERVAL = 60  # Проверяем каждую минуту
+CHECK_INTERVAL = 120  # Проверяем каждые 2 минуты
 
 # Настройки режимов
 MODE_70_MINUTE = {
@@ -31,18 +31,16 @@ MELBET_BASE_URL = 'https://melbet.ru/ru/sport'
 # Список лиг для отслеживания (ID лиг в API-Football)
 # Топ-лиги Европы и основные турниры
 LEAGUES_TO_TRACK = [
-    39,  # Premier League (Англия)
+    39,   # Premier League (Англия)
     140,  # La Liga (Испания)
-    78,  # Bundesliga (Германия)
+    78,   # Bundesliga (Германия)
     135,  # Serie A (Италия)
-    61,  # Ligue 1 (Франция)
-    2,  # UEFA Champions League
-    3,  # UEFA Europa League
+    61,   # Ligue 1 (Франция)
+    3,    # UEFA Europa League
     848,  # UEFA Conference League
-    94,  # Primeira Liga (Португалия)
-    88,  # Eredivisie (Нидерланды)
+    94,   # Primeira Liga (Португалия)
+    88,   # Eredivisie (Нидерланды)
     203,  # Süper Lig (Турция)
-    235,  # Premier League (Россия)
 ]
 
 # Текстовые сообщения

@@ -30,6 +30,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Отключаем надоедливые логи от библиотек
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('telegram').setLevel(logging.WARNING)
+logging.getLogger('telegram.ext').setLevel(logging.WARNING)
+
 
 class FootballBot:
     """Основной класс телеграм-бота"""
@@ -122,6 +128,37 @@ class FootballBot:
             try:
                 # Получаем список текущих матчей
                 matches = await self.api.get_live_matches()
+                if matches:
+                    active_ids = [
+                        self.api.format_match_info(m).get('fixture_id')
+                        for m in matches if isinstance(m, dict)
+                    ]
+                    self.api.clean_cache(active_ids)
+
+                # Если матчей нет
+                if not matches or len(matches) == 0:
+                    no_matches_count += 1
+
+                    # Если долго нет матчей - увеличиваем интервал
+                    if no_matches_count > 5:  # 5 итераций без матчей
+                        wait_time = CHECK_INTERVAL * 2  # Ждём в 2 раза дольше
+                        logger.info(f"Нет активных матчей, ждём {wait_time} секунд")
+                        await asyncio.sleep(wait_time)
+                        continue
+                else:
+                    no_matches_count = 0  # Сброс счётчика
+
+                # ... обработка матчей
+
+                await asyncio.sleep(CHECK_INTERVAL)
+
+                # Очищаем кэш от завершённых матчей
+                active_fixture_ids = [
+                    self.api.format_match_info(match).get('fixture_id')
+                    for match in matches
+                    if self.api.format_match_info(match).get('fixture_id')
+                ]
+                self.api.clean_cache(active_fixture_ids)
 
                 # Проверяем, не закончились ли запросы
                 if matches and isinstance(matches, list) and len(matches) > 0:

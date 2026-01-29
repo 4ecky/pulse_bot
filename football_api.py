@@ -19,6 +19,13 @@ class FootballAPI:
             'x-apisports-key': FOOTBALL_API_KEY
         }
         self.session: Optional[aiohttp.ClientSession] = None
+        self.events_cache: Dict[int, Dict] = {}
+        self.cache_duration = 120
+
+        # Кэш событий матчей
+        # Ключ: fixture_id, Значение: {'events': [...], 'timestamp': time()}
+        self.events_cache: Dict[int, Dict] = {}
+        self.cache_duration = 120  # Кэш на 2 минуты (120 секунд)
 
     async def init_session(self):
         """Инициализация сессии для запросов"""
@@ -76,53 +83,66 @@ class FootballAPI:
             return None
 
     async def get_live_matches(self) -> List[Dict]:
-        """
-        Получает список текущих (живых) матчей
+        params = {'live': 'all'}
+        data = await self._make_request('fixtures', params)
 
-        Returns:
-            Список матчей
-        """
-        matches = []
+        if data and 'quota_exceeded' in data:
+            return [{'quota_exceeded': True}]
 
-        # Получаем матчи для каждой лиги
-        for league_id in LEAGUES_TO_TRACK:
-            params = {
-                'league': league_id,
-                'season': 2024,  # Текущий сезон
-                'status': 'live'  # Только живые матчи
-            }
+        if not data or not data.get('response'):
+            return []
 
-            data = await self._make_request('fixtures', params)
+        all_matches = data['response']
+        filtered_matches = [
+            match for match in all_matches
+            if match.get('league', {}).get('id') in LEAGUES_TO_TRACK
+        ]
 
-            if data and 'quota_exceeded' in data:
-                return [{'quota_exceeded': True}]
-
-            if data and data.get('response'):
-                matches.extend(data['response'])
-
-        logger.info(f"Найдено {len(matches)} активных матчей")
-        return matches
+        logger.info(f"Найдено {len(filtered_matches)} активных матчей")
+        return filtered_matches
 
     async def get_match_events(self, fixture_id: int) -> List[Dict]:
-        """
-        Получает события конкретного матча
+        import time
 
-        Args:
-            fixture_id: ID матча
+        # Проверка кэша
+        if fixture_id in self.events_cache:
+            cached = self.events_cache[fixture_id]
+            if time.time() - cached['timestamp'] < self.cache_duration:
+                logger.info(f"Кэш для матча {fixture_id}")
+                return cached['events']
 
-        Returns:
-            Список событий матча
-        """
+        # Запрос к API
         params = {'fixture': fixture_id}
         data = await self._make_request('fixtures/events', params)
 
         if data and 'quota_exceeded' in data:
             return [{'quota_exceeded': True}]
 
-        if data and data.get('response'):
-            return data['response']
+        events = data.get('response', []) if data else []
 
-        return []
+        # Сохранение в кэш
+        self.events_cache[fixture_id] = {
+            'events': events,
+            'timestamp': time.time()
+        }
+
+        return events
+
+    # Очистка кэша завершенных матчей
+    def clean_cache(self, active_fixture_ids: List[int]):
+        """
+        Очищает кэш для матчей, которые больше не активны
+        """
+        # Удаляем из кэша все матчи, которых нет в списке активных
+        to_remove = [
+            fid for fid in self.events_cache.keys()
+            if fid not in active_fixture_ids
+        ]
+        for fid in to_remove:
+            del self.events_cache[fid]
+
+        if to_remove:
+            logger.info(f"Очищен кэш для {len(to_remove)} завершённых матчей")
 
     def format_match_info(self, match: Dict) -> Dict:
         """
@@ -154,3 +174,4 @@ class FootballAPI:
         except Exception as e:
             logger.error(f"Ошибка при форматировании матча: {e}")
             return {}
+
