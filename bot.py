@@ -17,12 +17,13 @@ from config import (
     CHECK_INTERVAL,
     MESSAGES,
     MODE_70_MINUTE,
-    BOT_VERSION
+    BOT_VERSION,
+    ALLOWED_USERS_FILE,
+    LEAGUES_TO_TRACK,
 )
 from football_api import FootballAPI
 from notifications import NotificationManager
 from functools import wraps
-from config import ALLOWED_USERS, ACCESS_DENIED_MESSAGE
 
 # Настройка логирования
 logging.basicConfig(
@@ -252,8 +253,6 @@ class FootballBot:
         # НОВОЕ: Application для доступа из глобального цикла
         self.application = None
 
-        # Загружаем список разрешённых пользователей
-        self.allowed_users = self.load_allowed_users()
 
     def load_active_users(self):
         """Загружает список активных пользователей из файла"""
@@ -626,7 +625,6 @@ class FootballBot:
         test_mode = "🧪 ВКЛ" if self.test_mode_active else "🧪 ВЫКЛ"
         total_active = len(self.get_active_user_ids())
 
-        from config import LEAGUES_TO_TRACK
 
         status_text = f"""
 📊 **Статус бота** (v{BOT_VERSION})
