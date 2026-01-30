@@ -614,13 +614,11 @@ class FootballBot:
         application.add_error_handler(error_handler)
 
         # Автоперезапуск при старте
-        async def post_init_wrapper(app):
+        async def on_startup(app):
+            # Ждём немного чтобы application полностью инициализировался
             await asyncio.sleep(3)
             logger.info("🔄 Проверка сохранённых пользователей...")
             await self.auto_restart_users(app)
-
-        async def on_startup(app):
-            app.create_task(post_init_wrapper(app))
 
         application.post_init = on_startup
 
