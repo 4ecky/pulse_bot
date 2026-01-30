@@ -294,6 +294,27 @@ class FootballBot:
             if info.get('is_running', False)
         ]
 
+    def load_allowed_users(self) -> list:
+        """Загружает список разрешённых пользователей из файла"""
+        file_path = Path(ALLOWED_USERS_FILE)
+        if file_path.exists():
+            try:
+                with open(file_path, 'r') as f:
+                    return json.load(f)
+            except:
+                return []
+        return []
+
+    def save_allowed_users(self, users: list):
+        """Сохраняет список разрешённых пользователей"""
+        with open(ALLOWED_USERS_FILE, 'w') as f:
+            json.dump(users, f, indent=2)
+
+    def is_user_allowed(self, user_id: int) -> bool:
+        """Проверяет разрешён ли доступ пользователю"""
+        allowed = self.load_allowed_users()
+        return user_id in allowed or user_id == ADMIN_ID
+
     async def auto_restart_users(self, application):
         """Автоматически перезапускает бота для сохранённых пользователей"""
         saved_users = self.load_active_users()
@@ -669,29 +690,6 @@ def main():
     finally:
         asyncio.run(bot.cleanup())
         logger.info("👋 Бот завершил работу")
-
-
-# Методы для разрешенных пользователей
-def load_allowed_users(self) -> list:
-    """Загружает список разрешённых пользователей из файла"""
-    file_path = Path(ALLOWED_USERS_FILE)
-    if file_path.exists():
-        try:
-            with open(file_path, 'r') as f:
-                return json.load(f)
-        except:
-            return []
-    return []
-
-def save_allowed_users(self, users: list):
-    """Сохраняет список разрешённых пользователей"""
-    with open(ALLOWED_USERS_FILE, 'w') as f:
-        json.dump(users, f, indent=2)
-
-def is_user_allowed(self, user_id: int) -> bool:
-    """Проверяет разрешён ли доступ пользователю"""
-    allowed = self.load_allowed_users()
-    return user_id in allowed or user_id == ADMIN_ID
 
 if __name__ == '__main__':
     main()
