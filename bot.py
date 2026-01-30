@@ -20,7 +20,9 @@ from config import (
     MODE_70_MINUTE,
     BOT_VERSION,
     ALLOWED_USERS,
-    ACCESS_DENIED_MESSAGE
+    ACCESS_DENIED_MESSAGE,
+    CHECK_INTERVAL_ACTIVE,
+    CHECK_INTERVAL_IDLE,
 )
 from football_api import FootballAPI
 from notifications import NotificationManager
@@ -253,9 +255,15 @@ class FootballBot:
 
                     await self.process_match_for_all_users(match, active_users)
 
-                logger.info(f"[Итерация {iteration}] Завершена. Следующая через {CHECK_INTERVAL}с")
+                if matches and len(matches) > 0:
+                    wait_time = CHECK_INTERVAL_ACTIVE
+                    logger.info(
+                        f"[Итерация {iteration}] ✅ {len(matches)} матчей. Следующая проверка через {wait_time}с")
+                else:
+                    wait_time = CHECK_INTERVAL_IDLE
+                    logger.info(f"[Итерация {iteration}] 💤 Нет матчей. Следующая проверка через {wait_time}с")
 
-                await asyncio.sleep(CHECK_INTERVAL)
+                await asyncio.sleep(wait_time)
 
             except Exception as e:
                 logger.error(f"❌ Ошибка в глобальном цикле: {e}")
@@ -357,36 +365,6 @@ class FootballBot:
             logger.error(f"❌ Ошибка обработки матча: {e}")
 
     @private_access_required
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start"""
-        user = update.effective_user
-        user_id = user.id
-
-        if user_id not in self.user_states:
-            self.user_states[user_id] = {
-                'is_running': False,
-                'username': user.first_name
-            }
-
-        if self.user_states[user_id]['is_running']:
-            await update.message.reply_text(MESSAGES['already_running'])
-            return
-
-        # Активируем пользователя
-        self.user_states[user_id]['is_running'] = True
-        self.user_states[user_id]['username'] = user.first_name
-
-        self.save_active_users()
-
-        welcome_message = MESSAGES['welcome'].format(name=user.first_name)
-        await update.message.reply_text(welcome_message)
-
-        logger.info(f"🚀 Бот запущен для {user_id} ({user.first_name})")
-
-        # Запускаем глобальный цикл (если ещё не запущен)
-        await self.start_global_loop()
-
-    @private_access_required
     async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /stop"""
         user_id = update.effective_user.id
@@ -405,62 +383,6 @@ class FootballBot:
         active_users = self.get_active_user_ids()
         if not active_users:
             await self.stop_global_loop()
-
-    @private_access_required
-    async def test_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /test (только админ)"""
-        user_id = update.effective_user.id
-
-        if user_id != ADMIN_ID:
-            await update.message.reply_text(MESSAGES['not_admin'])
-            return
-
-        self.test_mode_active = True
-        await update.message.reply_text(MESSAGES['test_mode_on'])
-        logger.info(f"🧪 Тестовый режим включен админом {user_id}")
-
-    @private_access_required
-    async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /status"""
-        user_id = update.effective_user.id
-
-        if user_id not in self.user_states:
-            await update.message.reply_text(
-                "❌ Бот не был запущен.\n\nИспользуй /start"
-            )
-            return
-
-        is_running = self.user_states[user_id].get('is_running', False)
-        test_mode = "🧪 ВКЛ" if self.test_mode_active else "🧪 ВЫКЛ"
-        total_active = len(self.get_active_user_ids())
-
-        from config import LEAGUES_TO_TRACK
-
-        status_text = f"""
-📊 **Статус бота** (v{BOT_VERSION})
-
-**Твой статус:** {'✅ Работает' if is_running else '⛔ Остановлен'}
-
-**Режимы:**
-- Режим "70 минута": {'✅ Активен' if is_running else '⛔ Неактивен'}
-- Тестовый режим: {test_mode}
-
-**Настройки:**
-- Интервал проверки: {CHECK_INTERVAL} сек
-- Отслеживается лиг: {len(LEAGUES_TO_TRACK)}
-- Активных пользователей: {total_active}
-- Глобальный цикл: {'✅ Работает' if self.global_loop_running else '⛔ Остановлен'}
-
-**Команды:**
-/start - запустить
-/stop - остановить
-/status - статус
-"""
-
-        if user_id == ADMIN_ID:
-            status_text += "/test - тест (админ)\n"
-
-        await update.message.reply_text(status_text, parse_mode='Markdown')
 
     async def cleanup(self):
         """Очистка ресурсов"""
@@ -512,6 +434,109 @@ def main():
         asyncio.run(bot.cleanup())
         logger.info("👋 Бот завершил работу")
 
+
+async def format_today_fixtures_message(self) -> str:
+    """
+    Форматирует сообщение со списком матчей на сегодня
+    Использует данные из глобального цикла - БЕЗ дополнительных запросов!
+
+    Returns:
+        Отформатированное сообщение
+    """
+    from datetime import datetime
+    import pytz
+
+    # НОВОЕ: Получаем матчи БЕЗ запроса к API!
+    # Используем данные из последнего запроса глобального цикла
+    fixtures = self.api.get_all_fixtures_today()
+
+    if not fixtures:
+        return (
+            "📅 Сегодня матчей не ожидается.\n\n"
+            "💡 _Данные обновляются автоматически каждые 2 минуты_"
+        )
+
+    # Фильтруем только предстоящие и live матчи (не завершённые)
+    active_fixtures = [
+        f for f in fixtures
+        if f.get('fixture', {}).get('status', {}).get('short') not in ['FT', 'AET', 'PEN', 'CANC', 'ABD', 'AWD', 'WO']
+    ]
+
+    if not active_fixtures:
+        return "📅 Все матчи на сегодня завершены."
+
+    # Группируем матчи по лигам
+    leagues = {}
+
+    for fixture in active_fixtures:
+        league_name = fixture.get('league', {}).get('name', 'Неизвестная лига')
+
+        if league_name not in leagues:
+            leagues[league_name] = []
+
+        leagues[league_name].append(fixture)
+
+    # Формируем сообщение
+    today_date = datetime.now().strftime('%d.%m.%Y')
+    message = f"📅 **Матчи на сегодня** ({today_date})\n\n"
+
+    total_matches = 0
+
+    for league_name, league_fixtures in leagues.items():
+        message += f"🏆 **{league_name}**\n\n"
+
+        for fixture in league_fixtures:
+            try:
+                # Получаем данные матча
+                home_team = fixture.get('teams', {}).get('home', {}).get('name', '?')
+                away_team = fixture.get('teams', {}).get('away', {}).get('name', '?')
+                fixture_id = fixture.get('fixture', {}).get('id')
+                status = fixture.get('fixture', {}).get('status', {}).get('short', 'NS')
+
+                # Время матча
+                fixture_date_str = fixture.get('fixture', {}).get('date')
+
+                if fixture_date_str:
+                    try:
+                        # Конвертируем в московское время
+                        utc_time = datetime.fromisoformat(fixture_date_str.replace('Z', '+00:00'))
+                        moscow_tz = pytz.timezone('Europe/Moscow')
+                        moscow_time = utc_time.astimezone(moscow_tz)
+                        time_str = moscow_time.strftime('%H:%M')
+                    except:
+                        time_str = "TBD"
+                else:
+                    time_str = "TBD"
+
+                # Статус матча
+                if status in ['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE']:
+                    status_emoji = "🔴 LIVE"
+                    elapsed = fixture.get('fixture', {}).get('status', {}).get('elapsed', '')
+                    if elapsed:
+                        time_str = f"{elapsed}'"
+                else:
+                    status_emoji = "🕐"
+
+                # Ссылка на матч в Мелбет
+                league_id = fixture.get('league', {}).get('id', '')
+                match_link = f"https://melbet.ru/ru/line/football/{league_id}"
+
+                # Добавляем матч в сообщение
+                message += f"{status_emoji} [{home_team} - {away_team}]({match_link}) | {time_str}\n"
+
+                total_matches += 1
+
+            except Exception as e:
+                logger.error(f"❌ Ошибка форматирования матча: {e}")
+                continue
+
+        message += "\n"
+
+    message += f"📊 Всего матчей: {total_matches}\n"
+    message += "💡 _Нажми на матч для открытия в Мелбет_\n"
+    message += "🔄 _Данные обновляются каждые 2 минуты_"
+
+    return message
 
 if __name__ == '__main__':
     main()
