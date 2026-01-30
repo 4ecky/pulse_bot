@@ -4,6 +4,7 @@
 """
 import aiohttp
 import logging
+import time
 from typing import List, Dict, Optional
 from config import FOOTBALL_API_BASE_URL, FOOTBALL_API_KEY, LEAGUES_TO_TRACK
 
@@ -19,13 +20,10 @@ class FootballAPI:
             'x-apisports-key': FOOTBALL_API_KEY
         }
         self.session: Optional[aiohttp.ClientSession] = None
-        self.events_cache: Dict[int, Dict] = {}
-        self.cache_duration = 120
 
         # Кэш событий матчей
-        # Ключ: fixture_id, Значение: {'events': [...], 'timestamp': time()}
         self.events_cache: Dict[int, Dict] = {}
-        self.cache_duration = 120  # Кэш на 2 минуты (120 секунд)
+        self.cache_duration = 120  # Кэш на 2 минуты
 
     async def init_session(self):
         """Инициализация сессии для запросов"""
@@ -60,30 +58,42 @@ class FootballAPI:
 
                     # Проверяем лимиты API
                     remaining = response.headers.get('x-ratelimit-requests-remaining')
-                    if remaining:
-                        logger.info(f"Осталось запросов: {remaining}")
+                    limit = response.headers.get('x-ratelimit-requests-limit')
 
-                        # Если запросы заканчиваются
-                        if int(remaining) < 10:
-                            logger.warning(f"Внимание! Осталось всего {remaining} запросов!")
+                    if remaining and limit:
+                        logger.info(f"📊 API квота: {remaining}/{limit} запросов осталось")
+
+                        # Предупреждение если мало осталось
+                        if int(remaining) < 20:
+                            logger.warning(f"⚠️ Мало запросов! Осталось: {remaining}/{limit}")
 
                     return data
 
                 elif response.status == 429:
                     # Превышен лимит запросов
-                    logger.error("Превышен лимит запросов к API!")
+                    logger.error("❌ Превышен лимит запросов к API!")
                     return {'quota_exceeded': True}
 
                 else:
-                    logger.error(f"Ошибка API: {response.status}")
+                    logger.error(f"❌ Ошибка API: {response.status}")
                     return None
 
         except Exception as e:
-            logger.error(f"Ошибка при запросе к API: {e}")
+            logger.error(f"❌ Ошибка при запросе к API: {e}")
             return None
 
     async def get_live_matches(self) -> List[Dict]:
-        params = {'live': 'all'}
+        """
+        Получает список текущих (живых) матчей
+
+        Returns:
+            Список матчей
+        """
+        # Один запрос для ВСЕХ live матчей
+        params = {
+            'live': 'all'
+        }
+
         data = await self._make_request('fixtures', params)
 
         if data and 'quota_exceeded' in data:
@@ -92,57 +102,76 @@ class FootballAPI:
         if not data or not data.get('response'):
             return []
 
+        # Фильтруем только матчи из нужных нам лиг
         all_matches = data['response']
         filtered_matches = [
             match for match in all_matches
             if match.get('league', {}).get('id') in LEAGUES_TO_TRACK
         ]
 
-        logger.info(f"Найдено {len(filtered_matches)} активных матчей")
+        logger.info(f"⚽ Найдено {len(filtered_matches)} активных матчей в отслеживаемых лигах")
         return filtered_matches
 
     async def get_match_events(self, fixture_id: int) -> List[Dict]:
-        import time
+        """
+        Получает события конкретного матча с кэшированием
+        ОПТИМИЗИРОВАНО: Кэш на 2 минуты!
 
-        # Проверка кэша
+        Args:
+            fixture_id: ID матча
+
+        Returns:
+            Список событий матча
+        """
+        # Проверяем кэш
         if fixture_id in self.events_cache:
             cached = self.events_cache[fixture_id]
-            if time.time() - cached['timestamp'] < self.cache_duration:
-                logger.info(f"Кэш для матча {fixture_id}")
+            cache_age = time.time() - cached['timestamp']
+
+            # Если кэш свежий (< 2 минут) - используем его
+            if cache_age < self.cache_duration:
+                logger.info(f"💾 Используем кэш для матча {fixture_id} (возраст: {int(cache_age)}с)")
                 return cached['events']
 
-        # Запрос к API
+        # Если кэша нет или устарел - делаем запрос
         params = {'fixture': fixture_id}
         data = await self._make_request('fixtures/events', params)
 
         if data and 'quota_exceeded' in data:
             return [{'quota_exceeded': True}]
 
-        events = data.get('response', []) if data else []
+        events = []
+        if data and data.get('response'):
+            events = data['response']
 
-        # Сохранение в кэш
+        # Сохраняем в кэш
         self.events_cache[fixture_id] = {
             'events': events,
             'timestamp': time.time()
         }
 
+        logger.info(f"🔄 Обновлён кэш для матча {fixture_id} ({len(events)} событий)")
+
         return events
 
-    # Очистка кэша завершенных матчей
     def clean_cache(self, active_fixture_ids: List[int]):
         """
         Очищает кэш для матчей, которые больше не активны
+
+        Args:
+            active_fixture_ids: Список ID активных матчей
         """
         # Удаляем из кэша все матчи, которых нет в списке активных
         to_remove = [
-            fid for fid in self.events_cache.keys()
-            if fid not in active_fixture_ids
+            fixture_id for fixture_id in self.events_cache.keys()
+            if fixture_id not in active_fixture_ids
         ]
-        for fid in to_remove:
-            del self.events_cache[fid]
+
+        for fixture_id in to_remove:
+            del self.events_cache[fixture_id]
 
         if to_remove:
-            logger.info(f"Очищен кэш для {len(to_remove)} завершённых матчей")
+            logger.info(f"🧹 Очищен кэш для {len(to_remove)} завершённых матчей")
 
     def format_match_info(self, match: Dict) -> Dict:
         """
@@ -172,6 +201,5 @@ class FootballAPI:
                 'elapsed': fixture.get('status', {}).get('elapsed'),
             }
         except Exception as e:
-            logger.error(f"Ошибка при форматировании матча: {e}")
+            logger.error(f"❌ Ошибка при форматировании матча: {e}")
             return {}
-
