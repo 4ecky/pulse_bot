@@ -41,7 +41,6 @@ class NotificationManager:
             score = f"{match_info['home_goals']}:{match_info['away_goals']}"
 
             # Создаем ссылку на матч в Мелбет
-            # Примечание: реальная ссылка может отличаться, это базовый вариант
             melbet_link = f"{MELBET_BASE_URL}/live/football"
 
             # Формируем текст уведомления
@@ -60,7 +59,7 @@ class NotificationManager:
             return notification
 
         except Exception as e:
-            logger.error(f"Ошибка при создании уведомления: {e}")
+            logger.error(f"❌ Ошибка при создании уведомления: {e}")
             return "Ошибка при формировании уведомления"
 
     @staticmethod

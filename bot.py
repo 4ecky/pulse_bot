@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Set
+from functools import wraps
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -18,12 +19,11 @@ from config import (
     MESSAGES,
     MODE_70_MINUTE,
     BOT_VERSION,
-    ALLOWED_USERS_FILE,
-    LEAGUES_TO_TRACK,
+    ALLOWED_USERS,
+    ACCESS_DENIED_MESSAGE
 )
 from football_api import FootballAPI
 from notifications import NotificationManager
-from functools import wraps
 
 # Настройка логирования
 logging.basicConfig(
@@ -38,23 +38,20 @@ logging.getLogger('httpcore').setLevel(logging.WARNING)
 logging.getLogger('telegram').setLevel(logging.WARNING)
 logging.getLogger('telegram.ext').setLevel(logging.WARNING)
 
-# Проверка доступа
+
 def private_access_required(func):
-    """Декоратор для проверки доступа с динамическим списком"""
+    """Декоратор для проверки доступа - только разрешённые пользователи"""
 
     @wraps(func)
     async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
 
-        # Проверяем доступ
-        if not self.is_user_allowed(user_id):
+        # Проверка по белому списку
+        if user_id not in ALLOWED_USERS:
             logger.warning(f"🚫 Неавторизованный доступ: {user_id} ({update.effective_user.first_name})")
 
             await update.message.reply_text(
-                f"🔒 **Доступ запрещён**\n\n"
-                f"Этот бот приватный.\n\n"
-                f"Ваш ID: `{user_id}`\n\n"
-                f"Для получения доступа свяжитесь с администратором и отправьте ему ваш ID.",
+                ACCESS_DENIED_MESSAGE.format(user_id=user_id),
                 parse_mode='Markdown'
             )
             return
@@ -63,182 +60,26 @@ def private_access_required(func):
 
     return wrapper
 
-# обработчики команд
-@private_access_required
-async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
-    user = update.effective_user
-    user_id = user.id
-
-@private_access_required
-async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /stop"""
-
-@private_access_required
-async def test_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /test"""
-
-@private_access_required
-async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /status"""
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
     logger.error(f"❌ Ошибка при обработке update: {context.error}")
 
-
     if "Conflict" in str(context.error):
         logger.error("⚠️ КОНФЛИКТ: Запущено несколько экземпляров бота!")
 
-# Команда для админа
-async def allow_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /allow - даёт доступ пользователю (только админ)"""
-    user_id = update.effective_user.id
 
-    # Только админ может давать доступ
-    if user_id != ADMIN_ID:
-        await update.message.reply_text(MESSAGES['not_admin'])
-        return
-
-    # Проверяем аргументы команды
-    if not context.args or len(context.args) == 0:
-        await update.message.reply_text(
-            "❌ Укажите ID пользователя для разрешения доступа.\n\n"
-            "Пример: `/allow 123456789`",
-            parse_mode='Markdown'
-        )
-        return
-
-    try:
-        target_user_id = int(context.args[0])
-
-        # Загружаем список
-        allowed = self.load_allowed_users()
-
-        # Проверяем не добавлен ли уже
-        if target_user_id in allowed:
-            await update.message.reply_text(f"ℹ️ Пользователь {target_user_id} уже имеет доступ.")
-            return
-
-        # Добавляем
-        allowed.append(target_user_id)
-        self.save_allowed_users(allowed)
-
-        await update.message.reply_text(
-            f"✅ Доступ предоставлен пользователю `{target_user_id}`\n\n"
-            f"Теперь он может использовать бота.",
-            parse_mode='Markdown'
-        )
-
-        # Пытаемся уведомить пользователя
-        try:
-            await self.application.bot.send_message(
-                chat_id=target_user_id,
-                text="🎉 Вам предоставлен доступ к боту!\n\nИспользуйте /start для начала работы."
-            )
-        except:
-            pass  # Не можем отправить если пользователь не писал боту
-
-        logger.info(f"✅ Админ {user_id} дал доступ пользователю {target_user_id}")
-
-    except ValueError:
-        await update.message.reply_text("❌ Неверный формат ID. Укажите числовой ID.")
-
-"""Команда /revoke - отзывает доступ (только админ)"""
-async def revoke_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-
-    if user_id != ADMIN_ID:
-        await update.message.reply_text(MESSAGES['not_admin'])
-        return
-
-    if not context.args or len(context.args) == 0:
-        await update.message.reply_text(
-            "❌ Укажите ID пользователя для отзыва доступа.\n\n"
-            "Пример: `/revoke 123456789`",
-            parse_mode='Markdown'
-        )
-        return
-
-    try:
-        target_user_id = int(context.args[0])
-
-        # Загружаем список
-        allowed = self.load_allowed_users()
-
-        # Проверяем есть ли в списке
-        if target_user_id not in allowed:
-            await update.message.reply_text(f"ℹ️ Пользователь {target_user_id} не имеет доступа.")
-            return
-
-        # Удаляем
-        allowed.remove(target_user_id)
-        self.save_allowed_users(allowed)
-
-        # Останавливаем бота для этого пользователя
-        if target_user_id in self.user_states:
-            self.user_states[target_user_id]['is_running'] = False
-            self.save_active_users()
-
-        await update.message.reply_text(
-            f"✅ Доступ отозван у пользователя `{target_user_id}`",
-            parse_mode='Markdown'
-        )
-
-        # Уведомляем пользователя
-        try:
-            await self.application.bot.send_message(
-                chat_id=target_user_id,
-                text="⛔ Ваш доступ к боту был отозван администратором."
-            )
-        except:
-            pass
-
-        logger.info(f"⛔ Админ {user_id} отозвал доступ у {target_user_id}")
-
-    except ValueError:
-        await update.message.reply_text("❌ Неверный формат ID.")
-
-"""Команда /list - показывает список разрешённых пользователей (только админ)"""
-async def list_users_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-
-    if user_id != ADMIN_ID:
-        await update.message.reply_text(MESSAGES['not_admin'])
-        return
-
-    allowed = self.load_allowed_users()
-
-    if not allowed:
-        await update.message.reply_text("ℹ️ Список разрешённых пользователей пуст.")
-        return
-
-    message = "📋 **Разрешённые пользователи:**\n\n"
-
-    for uid in allowed:
-        # Пытаемся получить имя пользователя
-        username = "Unknown"
-        if uid in self.user_states:
-            username = self.user_states[uid].get('username', 'Unknown')
-
-        is_active = "✅" if uid in self.get_active_user_ids() else "⛔"
-        message += f"{is_active} `{uid}` - {username}\n"
-
-    await update.message.reply_text(message, parse_mode='Markdown')
-
-"""Основной класс телеграм-бота с оптимизированной архитектурой"""
 class FootballBot:
+    """Основной класс телеграм-бота с оптимизированной архитектурой"""
 
     def __init__(self):
         self.api = FootballAPI()
         self.notification_manager = NotificationManager()
 
         # Словарь для хранения состояния каждого пользователя
-        # Ключ: user_id, Значение: {is_running, username}
         self.user_states: Dict[int, Dict] = {}
 
         # Множество для отслеживания уже отправленных уведомлений
-        # Ключ: (user_id, fixture_id, minute, player_name)
         self.sent_notifications: Set[tuple] = set()
 
         # Флаг для тестового режима
@@ -247,12 +88,11 @@ class FootballBot:
         # Файл для сохранения активных пользователей
         self.active_users_file = Path('active_users.json')
 
-        # НОВОЕ: Флаг работы глобального цикла
+        # Флаг работы глобального цикла
         self.global_loop_running = False
 
-        # НОВОЕ: Application для доступа из глобального цикла
+        # Application для доступа из глобального цикла
         self.application = None
-
 
     def load_active_users(self):
         """Загружает список активных пользователей из файла"""
@@ -285,34 +125,11 @@ class FootballBot:
             logger.error(f"❌ Ошибка сохранения активных пользователей: {e}")
 
     def get_active_user_ids(self) -> list:
-        """
-        Возвращает список ID всех активных пользователей
-        """
+        """Возвращает список ID всех активных пользователей"""
         return [
             uid for uid, info in self.user_states.items()
             if info.get('is_running', False)
         ]
-
-    def load_allowed_users(self) -> list:
-        """Загружает список разрешённых пользователей из файла"""
-        file_path = Path(ALLOWED_USERS_FILE)
-        if file_path.exists():
-            try:
-                with open(file_path, 'r') as f:
-                    return json.load(f)
-            except:
-                return []
-        return []
-
-    def save_allowed_users(self, users: list):
-        """Сохраняет список разрешённых пользователей"""
-        with open(ALLOWED_USERS_FILE, 'w') as f:
-            json.dump(users, f, indent=2)
-
-    def is_user_allowed(self, user_id: int) -> bool:
-        """Проверяет разрешён ли доступ пользователю"""
-        allowed = self.load_allowed_users()
-        return user_id in allowed or user_id == ADMIN_ID
 
     async def auto_restart_users(self, application):
         """Автоматически перезапускает бота для сохранённых пользователей"""
@@ -359,15 +176,12 @@ class FootballBot:
 
         logger.info(f"🎉 Перезапуск завершён: {restarted_count}/{len(saved_users)}")
 
-        # ВАЖНО: Запускаем глобальный цикл если есть активные пользователи
+        # Запускаем глобальный цикл если есть активные пользователи
         if restarted_count > 0:
             await self.start_global_loop()
 
     async def start_global_loop(self):
-        """
-        Запускает глобальный цикл проверки матчей (если ещё не запущен)
-        ОДИН цикл обслуживает ВСЕХ пользователей
-        """
+        """Запускает глобальный цикл проверки матчей (если ещё не запущен)"""
         if self.global_loop_running:
             logger.info("ℹ️ Глобальный цикл уже запущен")
             return
@@ -383,10 +197,7 @@ class FootballBot:
         logger.info("⏹ Глобальный цикл остановлен")
 
     async def global_matches_check_loop(self):
-        """
-        ГЛАВНЫЙ ЦИКЛ: Проверяет матчи для ВСЕХ активных пользователей
-        Делает запросы к API ОДИН РАЗ, рассылает результаты всем
-        """
+        """ГЛАВНЫЙ ЦИКЛ: Проверяет матчи для ВСЕХ активных пользователей"""
         logger.info("🔄 Глобальный цикл проверки матчей запущен")
 
         iteration = 0
@@ -453,13 +264,7 @@ class FootballBot:
         logger.info("⏹ Глобальный цикл проверки завершён")
 
     async def process_match_for_all_users(self, match: Dict, active_users: list):
-        """
-        Обрабатывает один матч для ВСЕХ активных пользователей
-
-        Args:
-            match: Данные о матче
-            active_users: Список ID активных пользователей
-        """
+        """Обрабатывает один матч для ВСЕХ активных пользователей"""
         try:
             match_info = self.api.format_match_info(match)
             fixture_id = match_info.get('fixture_id')
@@ -551,6 +356,7 @@ class FootballBot:
         except Exception as e:
             logger.error(f"❌ Ошибка обработки матча: {e}")
 
+    @private_access_required
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
         user = update.effective_user
@@ -580,6 +386,7 @@ class FootballBot:
         # Запускаем глобальный цикл (если ещё не запущен)
         await self.start_global_loop()
 
+    @private_access_required
     async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /stop"""
         user_id = update.effective_user.id
@@ -599,6 +406,7 @@ class FootballBot:
         if not active_users:
             await self.stop_global_loop()
 
+    @private_access_required
     async def test_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /test (только админ)"""
         user_id = update.effective_user.id
@@ -611,6 +419,7 @@ class FootballBot:
         await update.message.reply_text(MESSAGES['test_mode_on'])
         logger.info(f"🧪 Тестовый режим включен админом {user_id}")
 
+    @private_access_required
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /status"""
         user_id = update.effective_user.id
@@ -625,6 +434,7 @@ class FootballBot:
         test_mode = "🧪 ВКЛ" if self.test_mode_active else "🧪 ВЫКЛ"
         total_active = len(self.get_active_user_ids())
 
+        from config import LEAGUES_TO_TRACK
 
         status_text = f"""
 📊 **Статус бота** (v{BOT_VERSION})
@@ -657,30 +467,43 @@ class FootballBot:
         await self.api.close_session()
         logger.info("🧹 Ресурсы очищены")
 
+    def start(self):
+        """Запуск бота"""
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-def run(self):
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        # Сохраняем ссылку на application
+        self.application = application
 
-    self.application = application
+        application.add_handler(CommandHandler("start", self.start_command))
+        application.add_handler(CommandHandler("stop", self.stop_command))
+        application.add_handler(CommandHandler("test", self.test_command))
+        application.add_handler(CommandHandler("status", self.status_command))
+        application.add_error_handler(error_handler)
 
-    application.add_handler(CommandHandler("start", self.start_command))
-    application.add_handler(CommandHandler("stop", self.stop_command))
-    application.add_handler(CommandHandler("test", self.test_command))
-    application.add_handler(CommandHandler("status", self.status_command))
+        # Автоперезапуск при старте
+        async def post_init_wrapper(app):
+            await asyncio.sleep(3)
+            logger.info("🔄 Проверка сохранённых пользователей...")
+            await self.auto_restart_users(app)
 
-    # Команды управления доступом (только для админа)
-    application.add_handler(CommandHandler("allow", self.allow_command))
-    application.add_handler(CommandHandler("revoke", self.revoke_command))
-    application.add_handler(CommandHandler("list", self.list_users_command))
+        async def on_startup(app):
+            app.create_task(post_init_wrapper(app))
 
-    application.add_error_handler(error_handler)
+        application.post_init = on_startup
+
+        logger.info(f"🤖 Бот запущен! (v{BOT_VERSION})")
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
+
 
 def main():
     """Главная функция"""
     bot = FootballBot()
 
     try:
-        bot.run()
+        bot.start()
     except KeyboardInterrupt:
         logger.info("⚠️ Получен сигнал остановки")
     except Exception as e:
@@ -688,6 +511,7 @@ def main():
     finally:
         asyncio.run(bot.cleanup())
         logger.info("👋 Бот завершил работу")
+
 
 if __name__ == '__main__':
     main()

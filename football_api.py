@@ -85,6 +85,7 @@ class FootballAPI:
     async def get_live_matches(self) -> List[Dict]:
         """
         Получает список текущих (живых) матчей
+        ОПТИМИЗИРОВАНО: Один запрос вместо 12!
 
         Returns:
             Список матчей
