@@ -506,24 +506,6 @@ class FootballBot:
         # Запускаем глобальный цикл (если ещё не запущен)
         await self.start_global_loop()
 
-        # Показываем матчи на сегодня
-        # Ждём 2 секунды чтобы глобальный цикл успел сделать первый запрос
-        await asyncio.sleep(2)
-
-        try:
-            fixtures_message = await self.format_today_fixtures_message()
-            await update.message.reply_text(
-                fixtures_message,
-                parse_mode='Markdown',
-                disable_web_page_preview=True
-            )
-        except Exception as e:
-            logger.error(f"❌ Ошибка при отображении матчей: {e}")
-            await update.message.reply_text(
-                "⚠️ Загрузка расписания матчей...\n"
-                "Данные появятся через несколько секунд."
-            )
-
     @private_access_required
     async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /stop"""
@@ -556,6 +538,20 @@ class FootballBot:
         self.test_mode_active = True
         await update.message.reply_text(MESSAGES['test_mode_on'])
         logger.info(f"🧪 Тестовый режим включен админом {user_id}")
+
+        # НОВОЕ: Показываем live матчи администратору
+        await asyncio.sleep(2)  # Ждём обновления данных
+
+        try:
+            fixtures_message = await self.format_today_fixtures_message()
+            await update.message.reply_text(
+                fixtures_message,
+                parse_mode='Markdown',
+                disable_web_page_preview=True
+            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка при отображении матчей: {e}")
+            await update.message.reply_text("⚠️ Нет данных о текущих матчах")
 
     @private_access_required
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

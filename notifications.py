@@ -4,6 +4,7 @@
 import logging
 from typing import Dict
 from config import MODE_70_MINUTE, MELBET_BASE_URL
+from translations import translate_league, translate_team
 
 logger = logging.getLogger(__name__)
 
@@ -12,55 +13,50 @@ class NotificationManager:
     """Класс для управления уведомлениями"""
 
     @staticmethod
-    def create_goal_notification(match_info: Dict, event: Dict, mode_name: str) -> str:
+    def create_goal_notification(self, match_info: Dict, event: Dict, mode_name: str) -> str:
         """
         Создает текст уведомления о голе
-
-        Args:
-            match_info: Информация о матче
-            event: Информация о событии (гол)
-            mode_name: Название режима
-
-        Returns:
-            Отформатированный текст уведомления
         """
-        try:
-            # Получаем данные о голе
-            minute = event.get('time', {}).get('elapsed', 0)
-            extra_time = event.get('time', {}).get('extra', 0)
-            team_name = event.get('team', {}).get('name', 'Неизвестная команда')
-            player_name = event.get('player', {}).get('name', 'Неизвестный игрок')
+        # Базовая информация
+        league = match_info.get('league_name', 'Неизвестная лига')
+        league_country = match_info.get('league_country', '')
+        home_team = match_info.get('home_team', '?')
+        away_team = match_info.get('away_team', '?')
+        home_goals = match_info.get('home_goals', 0)
+        away_goals = match_info.get('away_goals', 0)
+        minute = event.get('time', {}).get('elapsed', '?')
 
-            # Формируем строку с минутой
-            if extra_time:
-                minute_str = f"{minute}+{extra_time}'"
-            else:
-                minute_str = f"{minute}'"
+        # ПЕРЕВОДИМ НА РУССКИЙ
+        league_ru = translate_league(league, league_country)
+        home_team_ru = translate_team(home_team)
+        away_team_ru = translate_team(away_team)
 
-            # Формируем счет
-            score = f"{match_info['home_goals']}:{match_info['away_goals']}"
+        # Информация о голе
+        player_name = event.get('player', {}).get('name', 'Неизвестный игрок')
+        team_name = event.get('team', {}).get('name', '')
+        team_name_ru = translate_team(team_name)
+        detail = event.get('detail', 'Goal')
 
-            # Создаем ссылку на матч в Мелбет
-            melbet_link = f"{MELBET_BASE_URL}/live/football"
+        # Эмодзи в зависимости от типа гола
+        if 'penalty' in detail.lower():
+            goal_emoji = '⚽️ (П)'
+        elif 'own' in detail.lower():
+            goal_emoji = '⚽️ (АГ)'
+        else:
+            goal_emoji = '⚽️'
 
-            # Формируем текст уведомления
-            notification = (
-                f"⚽ {mode_name}\n\n"
-                f"🏆 {match_info['league_name']}\n"
-                f"📍 {match_info['league_country']}\n\n"
-                f"🏟 {match_info['home_team']} vs {match_info['away_team']}\n\n"
-                f"⚡ ГОЛ! {team_name}\n"
-                f"👤 {player_name}\n\n"
-                f"📊 Счет: {score}\n"
-                f"⏱ Минута: {minute_str}\n\n"
-                f"🔗 [Смотреть матч в Мелбет]({melbet_link})"
-            )
+        # Формируем сообщение
+        message = f"{mode_name}\n\n"
+        message += f"🏆 **{league_ru}**\n"
+        message += f"{home_team_ru} **{home_goals}:{away_goals}** {away_team_ru}\n\n"
+        message += f"{goal_emoji} **{player_name}** ({team_name_ru})\n"
+        message += f"🕐 {minute}'\n\n"
 
-            return notification
+        # Ссылка на матч
+        fixture_id = match_info.get('fixture_id', '')
+        message += f"[📺 Смотреть онлайн](https://www.sofascore.com/)\n"
 
-        except Exception as e:
-            logger.error(f"❌ Ошибка при создании уведомления: {e}")
-            return "Ошибка при формировании уведомления"
+        return message
 
     @staticmethod
     def should_notify_70_minute_mode(self, minute: int, match_info: Dict, event: Dict) -> bool:
