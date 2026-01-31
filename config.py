@@ -31,18 +31,202 @@ MODE_70_MINUTE = {
 # URL для мобильного приложения Мелбет
 MELBET_BASE_URL = 'https://melbet.ru/ru/sport'
 
-# Список лиг для отслеживания (ID лиг в API-Football)
+# Список лиг для отслеживания (только лиги и дивизионы, БЕЗ кубков)
 LEAGUES_TO_TRACK = [
-    39,   # Premier League (Англия)
-    140,  # La Liga (Испания)
-    78,   # Bundesliga (Германия)
-    135,  # Serie A (Италия)
-    61,   # Ligue 1 (Франция)
-    3,    # UEFA Europa League
-    848,  # UEFA Conference League
-    94,   # Primeira Liga (Португалия)
-    88,   # Eredivisie (Нидерланды)
-    203,  # Süper Lig (Турция)
+    # АНГЛИЯ
+    39,  # Premier League
+    40,  # Championship
+    41,  # League One
+    42,  # League Two
+
+    # ИСПАНИЯ
+    140,  # La Liga
+    141,  # La Liga 2
+
+    # ГЕРМАНИЯ
+    78,  # Bundesliga
+    79,  # Bundesliga 2
+
+    # ИТАЛИЯ
+    135,  # Serie A
+    136,  # Serie B
+
+    # ФРАНЦИЯ
+    61,  # Ligue 1
+    62,  # Ligue 2
+
+    # ПОРТУГАЛИЯ
+    94,  # Primeira Liga
+    95,  # Segunda Liga
+
+    # НИДЕРЛАНДЫ
+    88,  # Eredivisie
+    89,  # Eerste Divisie
+
+    # ТУРЦИЯ
+    203,  # Süper Lig
+    204,  # 1. Lig
+
+    # БЕЛЬГИЯ
+    144,  # Pro League
+
+    # ШОТЛАНДИЯ
+    179,  # Premiership
+
+    # ГРЕЦИЯ
+    197,  # Super League
+
+    # АВСТРИЯ
+    218,  # Bundesliga
+
+    # ШВЕЙЦАРИЯ
+    207,  # Super League
+
+    # ДАНИЯ
+    119,  # Superliga
+
+    # НОРВЕГИЯ
+    103,  # Eliteserien
+
+    # ШВЕЦИЯ
+    113,  # Allsvenskan
+
+    # ЧЕХИЯ
+    345,  # First League
+
+    # ПОЛЬША
+    106,  # Ekstraklasa
+
+    # СЕРБИЯ
+    289,  # Super Liga
+
+    # ХОРВАТИЯ
+    210,  # HNL
+
+    # РУМЫНИЯ
+    283,  # Liga I
+
+    # БОЛГАРИЯ
+    172,  # First League
+
+    # СЛОВАКИЯ
+    332,  # Super Liga
+
+    # ВЕНГРИЯ
+    271,  # NB I
+
+    # ФИНЛЯНДИЯ
+    244,  # Veikkausliiga
+
+    # ИЗРАИЛЬ
+    383,  # Ligat ha'Al
+
+    # КИПР
+    318,  # First Division
+
+    # БРАЗИЛИЯ
+    71,  # Serie A
+    72,  # Serie B
+
+    # АРГЕНТИНА
+    128,  # Liga Profesional
+
+    # МЕКСИКА
+    262,  # Liga MX
+
+    # США
+    253,  # MLS
+
+    # ЧИЛИ
+    265,  # Primera Division
+
+    # КОЛУМБИЯ
+    239,  # Primera A
+
+    # УРУГВАЙ
+    274,  # Primera Division
+
+    # ПАРАГВАЙ
+    250,  # Division Profesional
+
+    # ЭКВАДОР
+    242,  # Serie A
+
+    # ПЕРУ
+    281,  # Liga 1
+
+    # ВЕНЕСУЭЛА
+    299,  # Primera Division
+
+    # БОЛИВИЯ
+    353,  # Division Profesional
+
+    # ЯПОНИЯ
+    98,  # J1 League
+    99,  # J2 League
+
+    # ЮЖНАЯ КОРЕЯ
+    292,  # K League 1
+
+    # КИТАЙ
+    17,  # Super League
+
+    # АВСТРАЛИЯ
+    188,  # A-League
+
+    # САУДОВСКАЯ АРАВИЯ
+    307,  # Pro League
+
+    # ОАЭ
+    301,  # Pro League
+
+    # КАТАР
+    305,  # Stars League
+
+    # ИРАН
+    290,  # Persian Gulf Pro League
+
+    # ИРАК
+    776,  # Stars League
+
+    # ИНДИЯ
+    323,  # Indian Super League
+
+    # ТАИЛАНД
+    271,  # Thai League 1
+
+    # МАЛАЙЗИЯ
+    318,  # Super League
+
+    # ИНДОНЕЗИЯ
+    274,  # Liga 1
+
+    # СИНГАПУР
+    617,  # Premier League
+
+    # ЮАР
+    288,  # Premier Division
+
+    # ЕГИПЕТ
+    233,  # Premier League
+
+    # МАРОККО
+    200,  # Botola Pro
+
+    # ТУНИС
+    202,  # Ligue 1
+
+    # АЛЖИР
+    187,  # Ligue 1
+
+    # НИГЕРИЯ
+    399,  # Professional League
+
+    # ГАНА
+    732,  # Premier League
+
+    # КЕНИЯ
+    286,  # Premier League
 ]
 
 # Белый список разрешённых пользователей (Telegram ID)

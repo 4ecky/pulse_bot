@@ -317,7 +317,12 @@ class FootballBot:
                 # Проверяем для КАЖДОГО пользователя
                 for user_id in active_users:
                     # Уникальный ключ для этого пользователя и события
-                    event_key = (user_id, fixture_id, minute, player_name)
+                    # Добавляем команду и тип для уникальности
+                    team_name = event.get('team', {}).get('name', '')
+                    event_type = event.get('type', '')
+                    detail = event.get('detail', '')
+
+                    event_key = (user_id, fixture_id, minute, player_name, team_name, event_type, detail)
 
                     # Уже отправляли этому пользователю?
                     if event_key in self.sent_notifications:
@@ -342,7 +347,8 @@ class FootballBot:
                             pass
                         logger.info("✅ Тестовый режим выключен")
 
-                    elif self.notification_manager.should_notify_70_minute_mode(minute):
+
+                    elif self.notification_manager.should_notify_70_minute_mode(minute, match_info, event):
                         should_notify = True
                         mode_name = MODE_70_MINUTE['name']
 

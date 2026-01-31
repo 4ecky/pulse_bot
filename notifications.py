@@ -63,20 +63,44 @@ class NotificationManager:
             return "Ошибка при формировании уведомления"
 
     @staticmethod
-    def should_notify_70_minute_mode(minute: int) -> bool:
+    def should_notify_70_minute_mode(self, minute: int, match_info: Dict, event: Dict) -> bool:
         """
-        Проверяет, нужно ли отправлять уведомление в режиме "70 минута"
+        Проверяет подходит ли гол под режим "70 минута"
+        НОВОЕ УСЛОВИЕ: Только первый гол в матче (счет должен стать 1:0 или 0:1)
 
         Args:
-            minute: Минута, на которой забит гол
+            minute: Минута гола
+            match_info: Информация о матче
+            event: Событие гола
 
         Returns:
-            True, если нужно отправить уведомление
+            True если нужно уведомление
         """
         min_minute = MODE_70_MINUTE['min_minute']
         max_minute = MODE_70_MINUTE['max_minute']
 
-        return min_minute <= minute <= max_minute
+        # Проверяем минуту
+        if not (min_minute <= minute <= max_minute):
+            return False
+
+        # Получаем текущий счет после гола
+        home_goals = match_info.get('home_goals', 0)
+        away_goals = match_info.get('away_goals', 0)
+
+        # Определяем какая команда забила
+        team_name = event.get('team', {}).get('name', '')
+        home_team = match_info.get('home_team', '')
+
+        # Проверяем: это первый гол в матче?
+        # Счет должен быть 1:0 или 0:1
+        total_goals = home_goals + away_goals
+
+        if total_goals != 1:
+            return False  # Не первый гол
+
+        # Это первый гол! Уведомляем
+        logger.info(f"✅ Режим '70 минута': ПЕРВЫЙ гол на {minute}' ({home_goals}:{away_goals})")
+        return True
 
     @staticmethod
     def is_goal_event(event: Dict) -> bool:
