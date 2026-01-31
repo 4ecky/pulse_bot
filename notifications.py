@@ -49,7 +49,7 @@ class NotificationManager:
         Проверяет подходит ли гол под режим "70 минута"
 
         УСЛОВИЯ:
-        1. Гол забит СТРОГО на 70-й минуте (70:00 - 70:59)
+        1. Гол забит на 69-й или 70-й минуте (69:00-70:59)
         2. Это ПЕРВЫЙ гол в матче (счет после гола: 1:0 или 0:1)
 
         Args:
@@ -63,9 +63,9 @@ class NotificationManager:
         min_minute = MODE_70_MINUTE['min_minute']
         max_minute = MODE_70_MINUTE['max_minute']
 
-        # УСЛОВИЕ 1: Проверяем что гол забит СТРОГО на 70-й минуте
-        if minute != 70:
-            logger.debug(f"❌ Режим '70 минута': Гол не на 70-й минуте (минута: {minute})")
+        # УСЛОВИЕ 1: Проверяем что гол забит на 69-й или 70-й минуте
+        if not (min_minute <= minute <= max_minute):
+            logger.debug(f"❌ Режим '70 минута': Гол не на 69-70 минуте (минута: {minute})")
             return False
 
         # УСЛОВИЕ 2: Получаем текущий счет после гола
@@ -84,13 +84,13 @@ class NotificationManager:
             return False
 
         # ✅ ОБА УСЛОВИЯ ВЫПОЛНЕНЫ!
-        # Гол на 70-й минуте И это первый гол в матче
+        # Гол на 69-й или 70-й минуте И это первый гол в матче
         logger.info(
             f"✅ Режим '70 минута' СРАБОТАЛ: "
             f"ПЕРВЫЙ гол на {minute}' минуте (счет {home_goals}:{away_goals})"
         )
         return True
-    
+
     def create_goal_notification(self, match_info: Dict, event: Dict, mode_name: str) -> str:
         """
         Создает текст уведомления о голе
