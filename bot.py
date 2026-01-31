@@ -308,6 +308,7 @@ class FootballBot:
 
             # Обрабатываем события для каждого пользователя
             for event in events:
+                # Проверяем что это гол
                 if not self.notification_manager.is_goal_event(event):
                     continue
 
@@ -317,7 +318,6 @@ class FootballBot:
                 # Проверяем для КАЖДОГО пользователя
                 for user_id in active_users:
                     # Уникальный ключ для этого пользователя и события
-                    # Добавляем команду и тип для уникальности
                     team_name = event.get('team', {}).get('name', '')
                     event_type = event.get('type', '')
                     detail = event.get('detail', '')
@@ -332,22 +332,12 @@ class FootballBot:
                     should_notify = False
                     mode_name = ""
 
+                    # Тестовый режим - уведомляем о ЛЮБОМ голе
                     if self.test_mode_active:
                         should_notify = True
                         mode_name = "🧪 Тестовый режим"
 
-                        # Выключаем тестовый режим после первого
-                        self.test_mode_active = False
-                        try:
-                            await self.application.bot.send_message(
-                                chat_id=ADMIN_ID,
-                                text=MESSAGES['test_mode_off']
-                            )
-                        except:
-                            pass
-                        logger.info("✅ Тестовый режим выключен")
-
-
+                    # Режим "70 минута" - только первый гол на 69-71 минуте
                     elif self.notification_manager.should_notify_70_minute_mode(minute, match_info, event):
                         should_notify = True
                         mode_name = MODE_70_MINUTE['name']
@@ -356,25 +346,46 @@ class FootballBot:
                     if should_notify:
                         try:
                             notification_text = self.notification_manager.create_goal_notification(
-                                match_info, event, mode_name
+                                match_info,
+                                event,
+                                mode_name
                             )
 
                             await self.application.bot.send_message(
                                 chat_id=user_id,
                                 text=notification_text,
-                                parse_mode='Markdown'
+                                parse_mode='Markdown',
+                                disable_web_page_preview=True
                             )
 
                             self.sent_notifications.add(event_key)
 
-                            logger.info(f"⚽ Уведомление → {user_id}: "
-                                        f"{match_info['home_team']} vs {match_info['away_team']}, "
-                                        f"мин {minute}")
+                            # Выключаем тестовый режим ТОЛЬКО после успешной отправки
+                            if self.test_mode_active:
+                                self.test_mode_active = False
+                                try:
+                                    await self.application.bot.send_message(
+                                        chat_id=ADMIN_ID,
+                                        text=MESSAGES['test_mode_off']
+                                    )
+                                except:
+                                    pass
+                                logger.info("✅ Тестовый режим выключен после отправки уведомления")
+
+                            logger.info(
+                                f"⚽ Уведомление → {user_id}: "
+                                f"{match_info.get('home_team', '?')} vs {match_info.get('away_team', '?')}, "
+                                f"мин {minute}, режим: {mode_name}"
+                            )
                         except Exception as e:
                             logger.error(f"❌ Ошибка отправки уведомления {user_id}: {e}")
+                            import traceback
+                            logger.error(traceback.format_exc())
 
         except Exception as e:
             logger.error(f"❌ Ошибка обработки матча: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     async def format_today_fixtures_message(self) -> str:
         """
