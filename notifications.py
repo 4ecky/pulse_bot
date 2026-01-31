@@ -47,7 +47,10 @@ class NotificationManager:
     def should_notify_70_minute_mode(self, minute: int, match_info: Dict, event: Dict) -> bool:
         """
         Проверяет подходит ли гол под режим "70 минута"
-        УСЛОВИЕ: Только первый гол в матче (счет должен стать 1:0 или 0:1)
+
+        УСЛОВИЯ:
+        1. Гол забит СТРОГО на 70-й минуте (70:00 - 70:59)
+        2. Это ПЕРВЫЙ гол в матче (счет после гола: 1:0 или 0:1)
 
         Args:
             minute: Минута гола
@@ -60,26 +63,34 @@ class NotificationManager:
         min_minute = MODE_70_MINUTE['min_minute']
         max_minute = MODE_70_MINUTE['max_minute']
 
-        # Проверяем минуту
-        if not (min_minute <= minute <= max_minute):
+        # УСЛОВИЕ 1: Проверяем что гол забит СТРОГО на 70-й минуте
+        if minute != 70:
+            logger.debug(f"❌ Режим '70 минута': Гол не на 70-й минуте (минута: {minute})")
             return False
 
-        # Получаем текущий счет после гола
+        # УСЛОВИЕ 2: Получаем текущий счет после гола
         home_goals = match_info.get('home_goals', 0)
         away_goals = match_info.get('away_goals', 0)
 
         # Проверяем: это первый гол в матче?
-        # Счет должен быть 1:0 или 0:1
+        # Счет должен быть СТРОГО 1:0 или 0:1
         total_goals = home_goals + away_goals
 
         if total_goals != 1:
-            logger.info(f"❌ Режим '70 минута': НЕ первый гол на {minute}' (счет {home_goals}:{away_goals})")
-            return False  # Не первый гол
+            logger.info(
+                f"❌ Режим '70 минута': НЕ первый гол на {minute}' "
+                f"(счет {home_goals}:{away_goals}, всего голов: {total_goals})"
+            )
+            return False
 
-        # Это первый гол! Уведомляем
-        logger.info(f"✅ Режим '70 минута': ПЕРВЫЙ гол на {minute}' (счет {home_goals}:{away_goals})")
+        # ✅ ОБА УСЛОВИЯ ВЫПОЛНЕНЫ!
+        # Гол на 70-й минуте И это первый гол в матче
+        logger.info(
+            f"✅ Режим '70 минута' СРАБОТАЛ: "
+            f"ПЕРВЫЙ гол на {minute}' минуте (счет {home_goals}:{away_goals})"
+        )
         return True
-
+    
     def create_goal_notification(self, match_info: Dict, event: Dict, mode_name: str) -> str:
         """
         Создает текст уведомления о голе
