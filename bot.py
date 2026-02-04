@@ -82,6 +82,9 @@ class FootballBot:
         self.api = FootballAPI()
         self.notification_manager = NotificationManager()
 
+        # Планировщик матчей
+        self.scheduler = None
+
         # Словарь для хранения состояния каждого пользователя
         self.user_states: Dict[int, Dict] = {}
 
@@ -111,6 +114,94 @@ class FootballBot:
             except Exception as e:
                 logger.error(f"❌ Ошибка загрузки активных пользователей: {e}")
         return []
+
+    def format_schedule_for_admin(self) -> str:
+        """
+        Форматирует расписание матчей на день для администратора
+
+        Returns:
+            Отформатированное расписание
+        """
+        try:
+            from translations import translate_league, translate_team
+        except:
+            def translate_league(name, country=None):
+                return name
+
+            def translate_team(name):
+                return name
+
+        if not self.scheduler or not self.scheduler.today_fixtures:
+            return "\n⚠️ Расписание матчей не загружено"
+
+        fixtures = self.scheduler.today_fixtures
+        schedule_date = self.scheduler.last_update_date
+
+        # Группируем матчи по времени
+        by_time = {}
+
+        for fixture in fixtures:
+            fixture_date_str = fixture.get('fixture', {}).get('date')
+            if not fixture_date_str:
+                continue
+
+            try:
+                from datetime import datetime
+                import pytz
+
+                utc_time = datetime.fromisoformat(fixture_date_str.replace('Z', '+00:00'))
+                moscow_tz = pytz.timezone('Europe/Moscow')
+                moscow_time = utc_time.astimezone(moscow_tz)
+                time_key = moscow_time.strftime('%H:%M')
+
+                if time_key not in by_time:
+                    by_time[time_key] = []
+
+                home = fixture.get('teams', {}).get('home', {}).get('name', '?')
+                away = fixture.get('teams', {}).get('away', {}).get('name', '?')
+                league = fixture.get('league', {}).get('name', '?')
+                league_country = fixture.get('league', {}).get('country', '')
+
+                # Переводим
+                home_ru = translate_team(home)
+                away_ru = translate_team(away)
+                league_ru = translate_league(league, league_country)
+
+                by_time[time_key].append({
+                    'home': home_ru,
+                    'away': away_ru,
+                    'league': league_ru
+                })
+            except Exception as e:
+                logger.error(f"Ошибка форматирования матча: {e}")
+                continue
+
+        if not by_time:
+            return "\n📅 На сегодня матчей не запланировано"
+
+        # Формируем сообщение
+        message = f"\n{'=' * 40}\n"
+        message += f"📅 **РАСПИСАНИЕ НА {schedule_date}**\n"
+        message += f"{'=' * 40}\n\n"
+
+        total_matches = 0
+
+        # Сортируем по времени
+        for time_key in sorted(by_time.keys()):
+            matches = by_time[time_key]
+            message += f"🕐 **{time_key} МСК**\n"
+
+            for match in matches:
+                message += f"⚽ {match['home']} - {match['away']}\n"
+                message += f"   _({match['league']})_\n"
+                total_matches += 1
+
+            message += "\n"
+
+        message += f"📊 **Всего матчей:** {total_matches}\n"
+        message += f"{'=' * 40}"
+
+        return message
 
     def save_active_users(self):
         """Сохраняет список активных пользователей в файл"""
@@ -204,8 +295,14 @@ class FootballBot:
         logger.info("⏹ Глобальный цикл остановлен")
 
     async def global_matches_check_loop(self):
-        """ГЛАВНЫЙ ЦИКЛ: Проверяет матчи для ВСЕХ активных пользователей"""
+        """ГЛАВНЫЙ ЦИКЛ с умным расписанием - НЕ делает запросов когда матчей нет!"""
         logger.info("🔄 Глобальный цикл проверки матчей запущен")
+
+        # Загружаем расписание при старте
+        await self.scheduler.update_daily_schedule()
+
+        # Запускаем автообновление расписания в 00:00
+        self.application.create_task(self.scheduler.schedule_daily_update())
 
         iteration = 0
 
@@ -219,16 +316,49 @@ class FootballBot:
                 break
 
             try:
-                iteration += 1
-                logger.info(f"[Итерация {iteration}] Проверка матчей для {len(active_users)} пользователей...")
+                # УМНАЯ ОПТИМИЗАЦИЯ: Проверяем нужно ли делать запросы СЕЙЧАС
+                if not self.scheduler.should_check_now():
+                    # НЕТ матчей сейчас - СПИМ до следующего окна
+                    sleep_seconds = self.scheduler.get_time_until_next_check()
 
-                # ОДИН запрос на всех пользователей!
+                    if sleep_seconds and sleep_seconds > 0:
+                        sleep_hours = sleep_seconds / 3600
+                        sleep_minutes = (sleep_seconds % 3600) / 60
+
+                        now_moscow = datetime.now(self.scheduler.moscow_tz)
+                        wake_time = now_moscow + timedelta(seconds=sleep_seconds)
+
+                        logger.info(
+                            f"😴 НЕТ матчей для проверки. "
+                            f"СПИМ {int(sleep_hours)}ч {int(sleep_minutes)}мин до {wake_time.strftime('%H:%M')} МСК"
+                        )
+
+                        # СПИМ до начала следующего матча (БЕЗ ЗАПРОСОВ!)
+                        await asyncio.sleep(sleep_seconds)
+
+                        logger.info(f"⏰ ПРОСНУЛИСЬ! Начинаем проверку матчей...")
+                        continue
+                    else:
+                        # Нет матчей вообще - короткий сон
+                        logger.info("💤 Нет запланированных матчей. Сон 5 минут...")
+                        await asyncio.sleep(300)
+                        continue
+
+                # Если дошли сюда - ЕСТЬ матчи для проверки прямо СЕЙЧАС
+                iteration += 1
+
+                active_count = self.scheduler.get_active_matches_count()
+                logger.info(
+                    f"[Итерация {iteration}] ⚽ Проверка матчей для {len(active_users)} пользователей. "
+                    f"Активных матчей: {active_count}"
+                )
+
+                # Делаем запрос live матчей
                 matches = await self.api.get_live_matches()
 
                 # Проверка квоты
                 if matches and isinstance(matches, list) and len(matches) > 0:
                     if matches[0].get('quota_exceeded'):
-                        # Уведомляем ВСЕХ пользователей
                         for user_id in active_users:
                             try:
                                 await self.application.bot.send_message(
@@ -260,22 +390,20 @@ class FootballBot:
 
                     await self.process_match_for_all_users(match, active_users)
 
-                # Динамический интервал: чаще проверяем когда есть матчи
-                if matches and len(matches) > 0:
-                    wait_time = CHECK_INTERVAL_ACTIVE
-                    logger.info(
-                        f"[Итерация {iteration}] ✅ {len(matches)} матчей. Следующая проверка через {wait_time}с")
-                else:
-                    wait_time = CHECK_INTERVAL_IDLE
-                    logger.info(f"[Итерация {iteration}] 💤 Нет матчей. Следующая проверка через {wait_time}с")
+                # Короткий интервал во время матчей
+                wait_time = CHECK_INTERVAL_ACTIVE
+                logger.info(f"[Итерация {iteration}] ✅ Следующая проверка через {wait_time}с")
 
                 await asyncio.sleep(wait_time)
 
             except Exception as e:
                 logger.error(f"❌ Ошибка в глобальном цикле: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 await asyncio.sleep(CHECK_INTERVAL_ACTIVE)
 
         logger.info("⏹ Глобальный цикл проверки завершён")
+
 
     async def process_match_for_all_users(self, match: Dict, active_users: list):
         """Обрабатывает один матч для ВСЕХ активных пользователей"""
@@ -581,29 +709,38 @@ class FootballBot:
 
         from config import LEAGUES_TO_TRACK
 
+        # Базовый статус
         status_text = f"""
-📊 **Статус бота** (v{BOT_VERSION})
+    📊 **Статус бота** (v{BOT_VERSION})
 
-**Твой статус:** {'✅ Работает' if is_running else '⛔ Остановлен'}
+    **Твой статус:** {'✅ Работает' if is_running else '⛔ Остановлен'}
 
-**Режимы:**
-- Режим "70 минута": {'✅ Активен' if is_running else '⛔ Неактивен'}
-- Тестовый режим: {test_mode}
+    **Режимы:**
+    - Режим "70 минута": {'✅ Активен' if is_running else '⛔ Неактивен'}
+    - Тестовый режим: {test_mode}
 
-**Настройки:**
-- Интервал проверки: {CHECK_INTERVAL_ACTIVE}с (live) / {CHECK_INTERVAL_IDLE}с (idle)
-- Отслеживается лиг: {len(LEAGUES_TO_TRACK)}
-- Активных пользователей: {total_active}
-- Глобальный цикл: {'✅ Работает' if self.global_loop_running else '⛔ Остановлен'}
+    **Настройки:**
+    - Интервал проверки: {CHECK_INTERVAL_ACTIVE}с (активные матчи)
+    - Отслеживается лиг: {len(LEAGUES_TO_TRACK)}
+    - Активных пользователей: {total_active}
+    - Глобальный цикл: {'✅ Работает' if self.global_loop_running else '⛔ Остановлен'}
+    """
 
-**Команды:**
-/start - запустить
-/stop - остановить
-/status - статус
-"""
-
+        # Если администратор - показываем дополнительную информацию
         if user_id == ADMIN_ID:
-            status_text += "/test - тест (админ)\n"
+            status_text += "\n**📋 Команды администратора:**\n"
+            status_text += "/test - включить тестовый режим\n"
+
+            # Расписание матчей
+            if self.scheduler and self.scheduler.today_fixtures:
+                status_text += "\n" + self.format_schedule_for_admin()
+            else:
+                status_text += "\n⚠️ Расписание матчей не загружено"
+        else:
+            status_text += "\n**Команды:**\n"
+            status_text += "/start - запустить\n"
+            status_text += "/stop - остановить\n"
+            status_text += "/status - статус\n"
 
         await update.message.reply_text(status_text, parse_mode='Markdown')
 
@@ -624,6 +761,10 @@ class FootballBot:
         application.add_handler(CommandHandler("test", self.test_command))
         application.add_handler(CommandHandler("status", self.status_command))
         application.add_error_handler(error_handler)
+
+        # Инициализируем планировщик
+        from scheduler import MatchScheduler
+        self.scheduler = MatchScheduler(self.api)
 
         # Автоперезапуск при старте
         async def on_startup(app):

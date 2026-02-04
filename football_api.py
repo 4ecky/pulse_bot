@@ -34,6 +34,45 @@ class FootballAPI:
         if self.session is None:
             self.session = aiohttp.ClientSession(headers=self.headers)
 
+    async def get_fixtures_by_date(self, date: str) -> List[Dict]:
+        """
+        Получает ВСЕ матчи на указанную дату
+        ОДИН запрос на весь день!
+
+        Args:
+            date: Дата в формате YYYY-MM-DD
+
+        Returns:
+            Список всех матчей на эту дату
+        """
+        all_fixtures = []
+
+        # Один запрос для всех лиг на эту дату
+        params = {
+            'date': date
+        }
+
+        data = await self._make_request('fixtures', params)
+
+        if data and 'quota_exceeded' in data:
+            logger.error("❌ Квота исчерпана при запросе расписания")
+            return []
+
+        if not data or not data.get('response'):
+            return []
+
+        # Фильтруем по нашим лигам
+        all_matches = data['response']
+
+        filtered_fixtures = [
+            match for match in all_matches
+            if match.get('league', {}).get('id') in LEAGUES_TO_TRACK
+        ]
+
+        logger.info(f"📅 Получено {len(filtered_fixtures)} матчей на {date}")
+
+        return filtered_fixtures
+
     async def close_session(self):
         """Закрытие сессии"""
         if self.session:
