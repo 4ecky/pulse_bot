@@ -6,7 +6,7 @@ import asyncio
 import logging
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Set
 from functools import wraps
 from telegram import Update
@@ -118,6 +118,7 @@ class FootballBot:
     def format_schedule_for_admin(self) -> str:
         """
         Форматирует расписание матчей на день для администратора
+        Красивое отображение как в Melbet
 
         Returns:
             Отформатированное расписание
@@ -137,8 +138,8 @@ class FootballBot:
         fixtures = self.scheduler.today_fixtures
         schedule_date = self.scheduler.last_update_date
 
-        # Группируем матчи по времени
-        by_time = {}
+        # Группируем матчи по лигам, затем по времени
+        by_league = {}
 
         for fixture in fixtures:
             fixture_date_str = fixture.get('fixture', {}).get('date')
@@ -152,54 +153,73 @@ class FootballBot:
                 utc_time = datetime.fromisoformat(fixture_date_str.replace('Z', '+00:00'))
                 moscow_tz = pytz.timezone('Europe/Moscow')
                 moscow_time = utc_time.astimezone(moscow_tz)
-                time_key = moscow_time.strftime('%H:%M')
-
-                if time_key not in by_time:
-                    by_time[time_key] = []
+                time_str = moscow_time.strftime('%H:%M')
 
                 home = fixture.get('teams', {}).get('home', {}).get('name', '?')
                 away = fixture.get('teams', {}).get('away', {}).get('name', '?')
                 league = fixture.get('league', {}).get('name', '?')
                 league_country = fixture.get('league', {}).get('country', '')
+                league_id = fixture.get('league', {}).get('id', 0)
 
                 # Переводим
                 home_ru = translate_team(home)
                 away_ru = translate_team(away)
                 league_ru = translate_league(league, league_country)
 
-                by_time[time_key].append({
+                # Группируем по лиге
+                league_key = f"{league_ru}"
+
+                if league_key not in by_league:
+                    by_league[league_key] = {
+                        'league_id': league_id,
+                        'matches': []
+                    }
+
+                by_league[league_key]['matches'].append({
+                    'time': time_str,
                     'home': home_ru,
                     'away': away_ru,
-                    'league': league_ru
+                    'datetime': moscow_time
                 })
+
             except Exception as e:
                 logger.error(f"Ошибка форматирования матча: {e}")
                 continue
 
-        if not by_time:
+        if not by_league:
             return "\n📅 На сегодня матчей не запланировано"
 
         # Формируем сообщение
-        message = f"\n{'=' * 40}\n"
+        message = f"\n`{'─' * 45}`\n"
         message += f"📅 **РАСПИСАНИЕ НА {schedule_date}**\n"
-        message += f"{'=' * 40}\n\n"
+        message += f"`{'─' * 45}`\n\n"
 
         total_matches = 0
 
-        # Сортируем по времени
-        for time_key in sorted(by_time.keys()):
-            matches = by_time[time_key]
-            message += f"🕐 **{time_key} МСК**\n"
+        # Сортируем лиги по времени первого матча
+        sorted_leagues = sorted(
+            by_league.items(),
+            key=lambda x: min(m['datetime'] for m in x[1]['matches'])
+        )
+
+        for league_name, league_data in sorted_leagues:
+            # Заголовок лиги
+            message += f"🏆 **{league_name}**\n\n"
+
+            # Сортируем матчи по времени
+            matches = sorted(league_data['matches'], key=lambda x: x['datetime'])
 
             for match in matches:
-                message += f"⚽ {match['home']} - {match['away']}\n"
-                message += f"   _({match['league']})_\n"
+                # Форматируем как в Melbet: команды жирным, время обычным
+                message += f"🕐 `{match['time']}`  **{match['home']}** — **{match['away']}**\n"
                 total_matches += 1
 
+            # Отступ между лигами
             message += "\n"
 
+        message += f"`{'─' * 45}`\n"
         message += f"📊 **Всего матчей:** {total_matches}\n"
-        message += f"{'=' * 40}"
+        message += f"`{'─' * 45}`"
 
         return message
 
