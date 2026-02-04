@@ -91,6 +91,48 @@ class NotificationManager:
         )
         return True
 
+    def should_notify_penalty_early_mode(self, minute: int, event: Dict) -> bool:
+        """
+        Проверяет подходит ли гол под режим "Пенальти 2-10 мин"
+
+        УСЛОВИЯ:
+        1. Гол забит с пенальти (penalty)
+        2. Время гола: 2-10 минута
+
+        Args:
+            minute: Минута гола
+            event: Событие гола
+
+        Returns:
+            True если нужно уведомление
+        """
+        from config import MODE_PENALTY_EARLY
+
+        min_minute = MODE_PENALTY_EARLY['min_minute']
+        max_minute = MODE_PENALTY_EARLY['max_minute']
+
+        # УСЛОВИЕ 1: Проверяем что это пенальти
+        detail = event.get('detail', '').lower()
+
+        if 'penalty' not in detail:
+            logger.debug(f"❌ Режим 'Пенальти 2-10': Не пенальти (detail: {detail})")
+            return False
+
+        # УСЛОВИЕ 2: Проверяем минуту
+        if not (min_minute <= minute <= max_minute):
+            logger.info(
+                f"❌ Режим 'Пенальти 2-10': Пенальти не в нужное время "
+                f"(минута: {minute}, нужно {min_minute}-{max_minute})"
+            )
+            return False
+
+        # ✅ ОБА УСЛОВИЯ ВЫПОЛНЕНЫ!
+        logger.info(
+            f"✅ Режим 'Пенальти 2-10' СРАБОТАЛ: "
+            f"Пенальти на {minute}' минуте"
+        )
+        return True
+
     def create_goal_notification(self, match_info: Dict, event: Dict, mode_name: str) -> str:
         """
         Создает текст уведомления о голе

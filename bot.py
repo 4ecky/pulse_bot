@@ -24,6 +24,7 @@ from config import (
     CHECK_INTERVAL_IDLE,
     MESSAGES,
     MODE_70_MINUTE,
+    MODE_PENALTY_EARLY,
     BOT_VERSION,
     ALLOWED_USERS,
     ACCESS_DENIED_MESSAGE
@@ -485,10 +486,15 @@ class FootballBot:
                         should_notify = True
                         mode_name = "🧪 Тестовый режим"
 
-                    # Режим "70 минута" - только первый гол на 69-71 минуте
+                    # Режим "70 минута" - только первый гол на 69-70 минуте
                     elif self.notification_manager.should_notify_70_minute_mode(minute, match_info, event):
                         should_notify = True
                         mode_name = MODE_70_MINUTE['name']
+
+                    # НОВОЕ: Режим "Пенальти 2-10 мин" - пенальти на 2-10 минуте
+                    elif self.notification_manager.should_notify_penalty_early_mode(minute, event):
+                        should_notify = True
+                        mode_name = MODE_PENALTY_EARLY['name']
 
                     # Отправляем уведомление
                     if should_notify:
@@ -737,6 +743,7 @@ class FootballBot:
 
     **Режимы:**
     - Режим "70 минута": {'✅ Активен' if is_running else '⛔ Неактивен'}
+    - Режим "Пенальти 2-10": {'✅ Активен' if is_running else '⛔ Неактивен'}
     - Тестовый режим: {test_mode}
 
     **Настройки:**
