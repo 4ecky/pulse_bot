@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Set
 from functools import wraps
 from telegram import Update
+from database import Database
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -83,6 +84,12 @@ class FootballBot:
         self.api = FootballAPI()
         self.notification_manager = NotificationManager()
 
+        # База данных
+        self.db = Database()
+
+        # Словарь для хранения состояния каждого пользователя
+        self.user_states: Dict[int, Dict] = {}
+
         # Планировщик матчей
         self.scheduler = None
 
@@ -104,17 +111,22 @@ class FootballBot:
         # Application для доступа из глобального цикла
         self.application = None
 
-    def load_active_users(self):
-        """Загружает список активных пользователей из файла"""
-        if self.active_users_file.exists():
-            try:
-                with open(self.active_users_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    logger.info(f"📂 Загружено {len(data)} активных пользователей")
-                    return data
-            except Exception as e:
-                logger.error(f"❌ Ошибка загрузки активных пользователей: {e}")
-        return []
+    async def load_active_users(self):
+        """Загружает список активных пользователей из БД"""
+        try:
+            users = await self.db.get_active_users()
+            logger.info(f"📂 Загружено {len(users)} активных пользователей из БД")
+            return users
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки активных пользователей: {e}")
+            return []
+
+    async def save_active_user(self, user_id: int, username: str, is_running: bool):
+        """Сохраняет пользователя в БД"""
+        try:
+            await self.db.save_user(user_id, username, is_running)
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
 
     def format_schedule_for_admin(self) -> str:
         """
@@ -224,24 +236,6 @@ class FootballBot:
 
         return message
 
-    def save_active_users(self):
-        """Сохраняет список активных пользователей в файл"""
-        try:
-            active = [
-                {
-                    'user_id': uid,
-                    'username': info.get('username', 'Unknown'),
-                    'saved_at': datetime.now().isoformat()
-                }
-                for uid, info in self.user_states.items()
-                if info.get('is_running', False)
-            ]
-            with open(self.active_users_file, 'w', encoding='utf-8') as f:
-                json.dump(active, f, indent=2, ensure_ascii=False)
-            logger.info(f"💾 Сохранено {len(active)} активных пользователей")
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения активных пользователей: {e}")
-
     def get_active_user_ids(self) -> list:
         """Возвращает список ID всех активных пользователей"""
         return [
@@ -251,7 +245,7 @@ class FootballBot:
 
     async def auto_restart_users(self, application):
         """Автоматически перезапускает бота для сохранённых пользователей"""
-        saved_users = self.load_active_users()
+        saved_users = await self.load_active_users()
 
         if not saved_users:
             logger.info("ℹ️ Нет сохранённых пользователей для перезапуска")
@@ -660,7 +654,7 @@ class FootballBot:
         self.user_states[user_id]['is_running'] = True
         self.user_states[user_id]['username'] = user.first_name
 
-        self.save_active_users()
+        await self.save_active_user(user_id, user.first_name, True)
 
         # Отправляем приветственное сообщение
         welcome_message = MESSAGES['welcome'].format(name=user.first_name)
@@ -681,7 +675,7 @@ class FootballBot:
             return
 
         self.user_states[user_id]['is_running'] = False
-        self.save_active_users()
+        await self.save_active_user(user_id, user.first_name, False)
 
         await update.message.reply_text(MESSAGES['stopped'])
         logger.info(f"⛔ Бот остановлен для {user_id}")
@@ -780,6 +774,10 @@ class FootballBot:
         """Запуск бота"""
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+        # Инициализируем планировщик
+        from scheduler import MatchScheduler
+        self.scheduler = MatchScheduler(self.api)
+
         # Сохраняем ссылку на application
         self.application = application
 
@@ -789,9 +787,14 @@ class FootballBot:
         application.add_handler(CommandHandler("status", self.status_command))
         application.add_error_handler(error_handler)
 
-        # Инициализируем планировщик
-        from scheduler import MatchScheduler
-        self.scheduler = MatchScheduler(self.api)
+        # НОВОЕ: Подключение к БД при старте
+        async def on_startup(app):
+            # Подключаемся к БД
+            await self.db.connect()
+
+            await asyncio.sleep(3)
+            logger.info("🔄 Проверка сохранённых пользователей...")
+            await self.auto_restart_users(app)
 
         # Автоперезапуск при старте
         async def on_startup(app):
