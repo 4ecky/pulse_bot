@@ -1,3 +1,7 @@
+"""
+Главный файл телеграм-бота
+ОПТИМИЗИРОВАННАЯ АРХИТЕКТУРА: один цикл проверки на всех пользователей
+"""
 import asyncio
 import logging
 import json
@@ -21,13 +25,11 @@ from config import (
     MESSAGES,
     MODE_70_MINUTE,
     MODE_PENALTY_EARLY,
-    BOT_VERSION,
     ALLOWED_USERS,
     ACCESS_DENIED_MESSAGE
 )
 from football_api import FootballAPI
 from notifications import NotificationManager
-from database import Database
 
 # Настройка логирования
 logging.basicConfig(
@@ -88,8 +90,8 @@ class FootballBot:
         self.api = FootballAPI()
         self.notification_manager = NotificationManager()
         
-        # База данных
-        self.db = Database()
+        # JSON файл для сохранения активных пользователей
+        self.active_users_file = Path('active_users.json')
         
         # Планировщик матчей (инициализируется позже)
         self.scheduler = None
@@ -100,31 +102,41 @@ class FootballBot:
         # Множество для отслеживания уже отправленных уведомлений
         self.sent_notifications: Set[tuple] = set()
         
-        # Флаг для тестового режима
-        self.test_mode_active = False
-        
         # Флаг работы глобального цикла
         self.global_loop_running = False
         
         # Application для доступа из глобального цикла
         self.application = None
     
-    async def load_active_users(self):
-        """Загружает список активных пользователей из БД"""
-        try:
-            users = await self.db.get_active_users()
-            logger.info(f"📂 Загружено {len(users)} активных пользователей")
-            return users
-        except Exception as e:
-            logger.error(f"❌ Ошибка загрузки активных пользователей: {e}")
-            return []
+    def load_active_users(self):
+        """Загружает список активных пользователей из JSON файла"""
+        if self.active_users_file.exists():
+            try:
+                with open(self.active_users_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    logger.info(f"📂 Загружено {len(data)} активных пользователей")
+                    return data
+            except Exception as e:
+                logger.error(f"❌ Ошибка загрузки активных пользователей: {e}")
+        return []
     
-    async def save_active_user(self, user_id: int, username: str, is_running: bool):
-        """Сохраняет пользователя в БД"""
+    def save_active_users(self):
+        """Сохраняет список активных пользователей в JSON файл"""
         try:
-            await self.db.save_user(user_id, username, is_running)
+            active = [
+                {
+                    'user_id': uid,
+                    'username': info.get('username', 'Unknown'),
+                    'saved_at': datetime.now().isoformat()
+                }
+                for uid, info in self.user_states.items()
+                if info.get('is_running', False)
+            ]
+            with open(self.active_users_file, 'w', encoding='utf-8') as f:
+                json.dump(active, f, indent=2, ensure_ascii=False)
+            logger.info(f"💾 Сохранено {len(active)} активных пользователей")
         except Exception as e:
-            logger.error(f"❌ Ошибка сохранения пользователя {user_id}: {e}")
+            logger.error(f"❌ Ошибка сохранения активных пользователей: {e}")
     
     def get_active_user_ids(self) -> list:
         """Возвращает список ID всех активных пользователей"""
@@ -132,56 +144,6 @@ class FootballBot:
             uid for uid, info in self.user_states.items()
             if info.get('is_running', False)
         ]
-    
-    async def auto_restart_users(self, application):
-        """Автоматически перезапускает бота для сохранённых пользователей"""
-        saved_users = await self.load_active_users()
-        
-        if not saved_users:
-            logger.info("ℹ️ Нет сохранённых пользователей для перезапуска")
-            return
-        
-        logger.info(f"🔄 Перезапуск для {len(saved_users)} пользователей...")
-        
-        restarted_count = 0
-        
-        for user_data in saved_users:
-            user_id = user_data.get('user_id')
-            username = user_data.get('username', 'Unknown')
-            
-            if not user_id:
-                continue
-            
-            try:
-                # Инициализируем состояние
-                self.user_states[user_id] = {
-                    'is_running': True,
-                    'username': username
-                }
-                
-                # Отправляем уведомление
-                await application.bot.send_message(
-                    chat_id=user_id,
-                    text=f"🔄 **Бот обновлён до версии {BOT_VERSION}**\n\n"
-                         f"✅ Автоматически перезапущен и продолжает работу.\n"
-                         f"📊 Все режимы активны.\n"
-                         f"⚡ Задержка уведомлений: 30-60 секунд",
-                    parse_mode='Markdown'
-                )
-                
-                restarted_count += 1
-                logger.info(f"✅ Перезапущен для {user_id} ({username})")
-                
-                await asyncio.sleep(0.5)
-                
-            except Exception as e:
-                logger.error(f"❌ Ошибка перезапуска для {user_id}: {e}")
-        
-        logger.info(f"🎉 Перезапуск завершён: {restarted_count}/{len(saved_users)}")
-        
-        # Запускаем глобальный цикл если есть активные пользователи
-        if restarted_count > 0:
-            await self.start_global_loop()
     
     async def start_global_loop(self):
         """Запускает глобальный цикл проверки матчей (если ещё не запущен)"""
@@ -208,9 +170,6 @@ class FootballBot:
         
         # Запускаем автообновление расписания в 00:00
         self.application.create_task(self.scheduler.schedule_daily_update())
-        
-        # Отправляем расписание администратору
-        await self.notify_admin_schedule()
         
         iteration = 0
         
@@ -277,10 +236,7 @@ class FootballBot:
                             except Exception as e:
                                 logger.error(f"❌ Ошибка уведомления {user_id}: {e}")
                         
-                        # Деактивируем всех в БД
-                        for user_id in active_users:
-                            await self.db.deactivate_user(user_id)
-                        
+                        self.save_active_users()
                         logger.warning(f"⚠️ Квота исчерпана. Бот остановлен для всех.")
                         self.global_loop_running = False
                         break
@@ -340,10 +296,7 @@ class FootballBot:
                         except Exception as e:
                             logger.error(f"❌ Ошибка уведомления {user_id}: {e}")
                     
-                    # Деактивируем всех в БД
-                    for user_id in active_users:
-                        await self.db.deactivate_user(user_id)
-                    
+                    self.save_active_users()
                     self.global_loop_running = False
                     return
             
@@ -373,13 +326,8 @@ class FootballBot:
                     should_notify = False
                     mode_name = ""
                     
-                    # Тестовый режим - уведомляем о ЛЮБОМ голе
-                    if self.test_mode_active:
-                        should_notify = True
-                        mode_name = "🧪 Тестовый режим"
-                    
                     # Режим "70 минута" - только первый гол на 69-70 минуте
-                    elif self.notification_manager.should_notify_70_minute_mode(minute, match_info, event):
+                    if self.notification_manager.should_notify_70_minute_mode(minute, match_info, event):
                         should_notify = True
                         mode_name = MODE_70_MINUTE['name']
                     
@@ -406,18 +354,6 @@ class FootballBot:
                             
                             self.sent_notifications.add(event_key)
                             
-                            # Выключаем тестовый режим ТОЛЬКО после успешной отправки
-                            if self.test_mode_active:
-                                self.test_mode_active = False
-                                try:
-                                    await self.application.bot.send_message(
-                                        chat_id=ADMIN_ID,
-                                        text=MESSAGES['test_mode_off']
-                                    )
-                                except:
-                                    pass
-                                logger.info("✅ Тестовый режим выключен после отправки уведомления")
-                            
                             logger.info(
                                 f"⚽ Уведомление → {user_id}: "
                                 f"{match_info.get('home_team', '?')} vs {match_info.get('away_team', '?')}, "
@@ -432,177 +368,6 @@ class FootballBot:
             logger.error(f"❌ Ошибка обработки матча: {e}")
             import traceback
             logger.error(traceback.format_exc())
-    
-    def format_schedule_for_admin(self) -> str:
-        """
-        Форматирует расписание матчей на день для администратора
-        Красивое отображение как в Melbet
-        
-        Returns:
-            Отформатированное расписание
-        """
-        try:
-            from translations import translate_league, translate_team
-        except:
-            def translate_league(name, country=None):
-                return name
-            def translate_team(name):
-                return name
-        
-        if not self.scheduler or not self.scheduler.today_fixtures:
-            return "\n⚠️ Расписание матчей не загружено"
-        
-        fixtures = self.scheduler.today_fixtures
-        schedule_date = self.scheduler.last_update_date
-        
-        # Группируем матчи по лигам, затем по времени
-        by_league = {}
-        
-        for fixture in fixtures:
-            fixture_date_str = fixture.get('fixture', {}).get('date')
-            if not fixture_date_str:
-                continue
-            
-            try:
-                import pytz
-                
-                utc_time = datetime.fromisoformat(fixture_date_str.replace('Z', '+00:00'))
-                moscow_tz = pytz.timezone('Europe/Moscow')
-                moscow_time = utc_time.astimezone(moscow_tz)
-                time_str = moscow_time.strftime('%H:%M')
-                
-                home = fixture.get('teams', {}).get('home', {}).get('name', '?')
-                away = fixture.get('teams', {}).get('away', {}).get('name', '?')
-                league = fixture.get('league', {}).get('name', '?')
-                league_country = fixture.get('league', {}).get('country', '')
-                league_id = fixture.get('league', {}).get('id', 0)
-                
-                # Переводим
-                home_ru = translate_team(home)
-                away_ru = translate_team(away)
-                league_ru = translate_league(league, league_country)
-                
-                # Группируем по лиге
-                league_key = f"{league_ru}"
-                
-                if league_key not in by_league:
-                    by_league[league_key] = {
-                        'league_id': league_id,
-                        'matches': []
-                    }
-                
-                by_league[league_key]['matches'].append({
-                    'time': time_str,
-                    'home': home_ru,
-                    'away': away_ru,
-                    'datetime': moscow_time
-                })
-                
-            except Exception as e:
-                logger.error(f"Ошибка форматирования матча: {e}")
-                continue
-        
-        if not by_league:
-            return "\n📅 На сегодня матчей не запланировано"
-        
-        # Формируем сообщение
-        message = f"\n`{'─' * 45}`\n"
-        message += f"📅 **РАСПИСАНИЕ НА {schedule_date}**\n"
-        message += f"`{'─' * 45}`\n\n"
-        
-        total_matches = 0
-        
-        # Сортируем лиги по времени первого матча
-        sorted_leagues = sorted(
-            by_league.items(),
-            key=lambda x: min(m['datetime'] for m in x[1]['matches'])
-        )
-        
-        for league_name, league_data in sorted_leagues:
-            # Заголовок лиги
-            message += f"🏆 **{league_name}**\n\n"
-            
-            # Сортируем матчи по времени
-            matches = sorted(league_data['matches'], key=lambda x: x['datetime'])
-            
-            for match in matches:
-                # Форматируем как в Melbet: команды жирным, время обычным
-                message += f"🕐 `{match['time']}`  **{match['home']}** — **{match['away']}**\n"
-                total_matches += 1
-            
-            # Отступ между лигами
-            message += "\n"
-        
-        message += f"`{'─' * 45}`\n"
-        message += f"📊 **Всего матчей:** {total_matches}\n"
-        message += f"`{'─' * 45}`"
-        
-        return message
-    
-    async def notify_admin_schedule(self):
-        """Отправляет расписание администратору после обновления"""
-        if not ADMIN_ID or ADMIN_ID not in ALLOWED_USERS:
-            return
-        
-        try:
-            message = "🔔 **Расписание обновлено!**"
-            message += self.format_schedule_for_admin()
-            
-            # Разбиваем на части если длинное
-            await self.send_long_message_to_user(ADMIN_ID, message)
-            
-            logger.info(f"📨 Расписание отправлено администратору {ADMIN_ID}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка отправки расписания админу: {e}")
-    
-    async def send_long_message_to_user(self, user_id: int, text: str, max_length: int = 4000):
-        """
-        Отправляет длинное сообщение пользователю, разбивая его на части
-        
-        Args:
-            user_id: ID пользователя
-            text: Текст для отправки
-            max_length: Максимальная длина одного сообщения
-        """
-        # Если сообщение короткое - отправляем сразу
-        if len(text) <= max_length:
-            await self.application.bot.send_message(
-                chat_id=user_id,
-                text=text,
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Разбиваем по строкам
-        lines = text.split('\n')
-        current_chunk = ""
-        chunk_number = 1
-        
-        for line in lines:
-            # Если добавление строки превысит лимит
-            if len(current_chunk) + len(line) + 1 > max_length:
-                # Отправляем текущий чанк
-                header = f"**📄 Часть {chunk_number}**\n\n" if chunk_number > 1 else ""
-                await self.application.bot.send_message(
-                    chat_id=user_id,
-                    text=header + current_chunk,
-                    parse_mode='Markdown'
-                )
-                
-                # Начинаем новый чанк
-                current_chunk = line + "\n"
-                chunk_number += 1
-            else:
-                current_chunk += line + "\n"
-        
-        # Отправляем последний чанк
-        if current_chunk.strip():
-            header = f"**📄 Часть {chunk_number}**\n\n" if chunk_number > 1 else ""
-            await self.application.bot.send_message(
-                chat_id=user_id,
-                text=header + current_chunk,
-                parse_mode='Markdown'
-            )
     
     @private_access_required
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -624,7 +389,7 @@ class FootballBot:
         self.user_states[user_id]['is_running'] = True
         self.user_states[user_id]['username'] = user.first_name
         
-        await self.save_active_user(user_id, user.first_name, True)
+        self.save_active_users()
         
         # Отправляем приветственное сообщение
         welcome_message = MESSAGES['welcome'].format(name=user.first_name)
@@ -645,7 +410,7 @@ class FootballBot:
             return
         
         self.user_states[user_id]['is_running'] = False
-        await self.save_active_user(user_id, update.effective_user.first_name, False)
+        self.save_active_users()
         
         await update.message.reply_text(MESSAGES['stopped'])
         logger.info(f"⛔ Бот остановлен для {user_id}")
@@ -656,91 +421,62 @@ class FootballBot:
             await self.stop_global_loop()
     
     @private_access_required
-    async def test_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /test (только админ)"""
-        user_id = update.effective_user.id
-        
-        if user_id != ADMIN_ID:
-            await update.message.reply_text(MESSAGES['not_admin'])
-            return
-        
-        self.test_mode_active = True
-        await update.message.reply_text(MESSAGES['test_mode_on'])
-        logger.info(f"🧪 Тестовый режим включен админом {user_id}")
-        
-        # Показываем live матчи администратору
-        await asyncio.sleep(2)
-        
+    async def games_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /games - показывает матчи на сегодня"""
         try:
-            fixtures_message = await self.format_today_fixtures_message()
-            await update.message.reply_text(
-                fixtures_message,
-                parse_mode='Markdown',
-                disable_web_page_preview=True
-            )
-        except Exception as e:
-            logger.error(f"❌ Ошибка при отображении матчей: {e}")
-            await update.message.reply_text("⚠️ Нет данных о текущих матчах")
-    
-    async def format_today_fixtures_message(self) -> str:
-        """
-        Форматирует сообщение со списком матчей на сегодня
-        Использует данные из глобального цикла - БЕЗ дополнительных запросов!
-        """
-        import pytz
-        
-        # Получаем матчи БЕЗ запроса к API!
-        fixtures = self.api.get_all_fixtures_today()
-        
-        if not fixtures:
-            return (
-                "📅 Сегодня матчей не ожидается.\n\n"
-                "💡 _Данные обновляются автоматически каждые 30 секунд_"
-            )
-        
-        # Фильтруем только предстоящие и live матчи (не завершённые)
-        active_fixtures = [
-            f for f in fixtures
-            if f.get('fixture', {}).get('status', {}).get('short') not in ['FT', 'AET', 'PEN', 'CANC', 'ABD', 'AWD', 'WO']
-        ]
-        
-        if not active_fixtures:
-            return "📅 Все матчи на сегодня завершены."
-        
-        # Группируем матчи по лигам
-        leagues = {}
-        
-        for fixture in active_fixtures:
-            league_name = fixture.get('league', {}).get('name', 'Неизвестная лига')
+            import pytz
             
-            if league_name not in leagues:
-                leagues[league_name] = []
+            if not self.scheduler or not self.scheduler.today_fixtures:
+                await update.message.reply_text("⚠️ Расписание матчей ещё не загружено. Попробуйте позже.")
+                return
             
-            leagues[league_name].append(fixture)
-        
-        # Формируем сообщение
-        today_date = datetime.now().strftime('%d.%m.%Y')
-        message = f"📅 **Матчи на сегодня** ({today_date})\n\n"
-        
-        total_matches = 0
-        
-        for league_name, league_fixtures in leagues.items():
-            message += f"🏆 **{league_name}**\n\n"
+            fixtures = self.scheduler.today_fixtures
             
-            for fixture in league_fixtures:
+            # Фильтруем только активные (не завершённые)
+            active_fixtures = [
+                f for f in fixtures
+                if f.get('fixture', {}).get('status', {}).get('short') not in ['FT', 'AET', 'PEN', 'CANC', 'ABD', 'AWD', 'WO']
+            ]
+            
+            total_count = len(active_fixtures)
+            
+            if total_count == 0:
+                await update.message.reply_text("📅 На сегодня матчей не запланировано или все завершены.")
+                return
+            
+            # Берём только первые 5
+            display_fixtures = active_fixtures[:5]
+            
+            # Формируем сообщение
+            today_date = datetime.now().strftime('%d.%m.%Y')
+            message = f"📅 **Матчи на {today_date}**\n\n"
+            message += f"📊 **Всего матчей:** {total_count}\n\n"
+            
+            try:
+                from translations import translate_team, translate_league
+            except:
+                def translate_team(name):
+                    return name
+                def translate_league(name, country=None):
+                    return name
+            
+            for idx, fixture in enumerate(display_fixtures, 1):
                 try:
-                    # Получаем данные матча
-                    home_team = fixture.get('teams', {}).get('home', {}).get('name', '?')
-                    away_team = fixture.get('teams', {}).get('away', {}).get('name', '?')
-                    fixture_id = fixture.get('fixture', {}).get('id')
-                    status = fixture.get('fixture', {}).get('status', {}).get('short', 'NS')
+                    home = fixture.get('teams', {}).get('home', {}).get('name', '?')
+                    away = fixture.get('teams', {}).get('away', {}).get('name', '?')
+                    league = fixture.get('league', {}).get('name', '?')
+                    league_country = fixture.get('league', {}).get('country', '')
+                    
+                    # Переводим
+                    home_ru = translate_team(home)
+                    away_ru = translate_team(away)
+                    league_ru = translate_league(league, league_country)
                     
                     # Время матча
                     fixture_date_str = fixture.get('fixture', {}).get('date')
                     
                     if fixture_date_str:
                         try:
-                            # Конвертируем в московское время
                             utc_time = datetime.fromisoformat(fixture_date_str.replace('Z', '+00:00'))
                             moscow_tz = pytz.timezone('Europe/Moscow')
                             moscow_time = utc_time.astimezone(moscow_tz)
@@ -750,139 +486,38 @@ class FootballBot:
                     else:
                         time_str = "TBD"
                     
-                    # Статус матча
+                    # Статус
+                    status = fixture.get('fixture', {}).get('status', {}).get('short', 'NS')
+                    
                     if status in ['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE']:
-                        status_emoji = "🔴 LIVE"
+                        status_emoji = "🔴"
                         elapsed = fixture.get('fixture', {}).get('status', {}).get('elapsed', '')
                         if elapsed:
                             time_str = f"{elapsed}'"
                     else:
                         status_emoji = "🕐"
                     
-                    # Добавляем матч в сообщение
-                    message += f"{status_emoji} {home_team} - {away_team} | {time_str}\n"
-                    
-                    total_matches += 1
+                    message += f"{status_emoji} **{home_ru}** — **{away_ru}**\n"
+                    message += f"   _{league_ru}_ | {time_str}\n\n"
                     
                 except Exception as e:
                     logger.error(f"❌ Ошибка форматирования матча: {e}")
                     continue
             
-            message += "\n"
-        
-        message += f"📊 Всего матчей: {total_matches}\n"
-        message += "🔄 _Данные обновляются каждые 30 секунд_"
-        
-        return message
-    
-    @private_access_required
-    async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /status"""
-        user_id = update.effective_user.id
-        
-        if user_id not in self.user_states:
-            await update.message.reply_text(
-                "❌ Бот не был запущен.\n\nИспользуй /start"
-            )
-            return
-        
-        is_running = self.user_states[user_id].get('is_running', False)
-        test_mode = "🧪 ВКЛ" if self.test_mode_active else "🧪 ВЫКЛ"
-        total_active = len(self.get_active_user_ids())
-        
-        from config import LEAGUES_TO_TRACK
-        
-        # Базовый статус
-        status_text = f"""
-📊 **Статус бота** (v{BOT_VERSION})
-
-**Твой статус:** {'✅ Работает' if is_running else '⛔ Остановлен'}
-
-**Режимы:**
-- Режим "70 минута": {'✅ Активен' if is_running else '⛔ Неактивен'}
-- Режим "Пенальти 2-10": {'✅ Активен' if is_running else '⛔ Неактивен'}
-- Тестовый режим: {test_mode}
-
-**Настройки:**
-- Интервал проверки: {CHECK_INTERVAL_ACTIVE}с (активные матчи)
-- Отслеживается лиг: {len(LEAGUES_TO_TRACK)}
-- Активных пользователей: {total_active}
-- Глобальный цикл: {'✅ Работает' if self.global_loop_running else '⛔ Остановлен'}
-"""
-        
-        # Отправляем основной статус
-        await update.message.reply_text(status_text, parse_mode='Markdown')
-        
-        # Если администратор - показываем дополнительную информацию
-        if user_id == ADMIN_ID:
-            admin_info = "\n**📋 Команды администратора:**\n"
-            admin_info += "/test - включить тестовый режим\n"
+            if total_count > 5:
+                message += f"_... и ещё {total_count - 5} матчей_"
             
-            await update.message.reply_text(admin_info, parse_mode='Markdown')
+            await update.message.reply_text(message, parse_mode='Markdown')
             
-            # Расписание отдельным сообщением
-            if self.scheduler and self.scheduler.today_fixtures:
-                schedule_text = self.format_schedule_for_admin()
-                
-                # Разбиваем на части если длиннее 4096 символов
-                await self.send_long_message(update, schedule_text)
-            else:
-                await update.message.reply_text("⚠️ Расписание матчей не загружено")
-        else:
-            commands_text = "\n**Команды:**\n"
-            commands_text += "/start - запустить\n"
-            commands_text += "/stop - остановить\n"
-            commands_text += "/status - статус\n"
-            
-            await update.message.reply_text(commands_text, parse_mode='Markdown')
-    
-    async def send_long_message(self, update: Update, text: str, max_length: int = 4000):
-        """
-        Отправляет длинное сообщение, разбивая его на части
-        
-        Args:
-            update: Update объект
-            text: Текст для отправки
-            max_length: Максимальная длина одного сообщения
-        """
-        # Если сообщение короткое - отправляем сразу
-        if len(text) <= max_length:
-            await update.message.reply_text(text, parse_mode='Markdown')
-            return
-        
-        # Разбиваем по строкам
-        lines = text.split('\n')
-        current_chunk = ""
-        chunk_number = 1
-        
-        for line in lines:
-            # Если добавление строки превысит лимит
-            if len(current_chunk) + len(line) + 1 > max_length:
-                # Отправляем текущий чанк
-                header = f"**📄 Часть {chunk_number}**\n\n" if chunk_number > 1 else ""
-                await update.message.reply_text(
-                    header + current_chunk,
-                    parse_mode='Markdown'
-                )
-                
-                # Начинаем новый чанк
-                current_chunk = line + "\n"
-                chunk_number += 1
-            else:
-                current_chunk += line + "\n"
-        
-        # Отправляем последний чанк
-        if current_chunk.strip():
-            header = f"**📄 Часть {chunk_number}**\n\n" if chunk_number > 1 else ""
-            await update.message.reply_text(
-                header + current_chunk,
-                parse_mode='Markdown'
-            )
+        except Exception as e:
+            logger.error(f"❌ Ошибка в команде /games: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            await update.message.reply_text("❌ Ошибка при получении списка матчей")
     
     async def cleanup(self):
         """Очистка ресурсов"""
         await self.api.close_session()
-        await self.db.close()
         logger.info("🧹 Ресурсы очищены")
     
     def start(self):
@@ -898,22 +533,10 @@ class FootballBot:
         
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("stop", self.stop_command))
-        application.add_handler(CommandHandler("test", self.test_command))
-        application.add_handler(CommandHandler("status", self.status_command))
+        application.add_handler(CommandHandler("games", self.games_command))
         application.add_error_handler(error_handler)
         
-        # Подключение к БД и автоперезапуск при старте
-        async def on_startup(app):
-            # Подключаемся к БД
-            await self.db.connect()
-            
-            await asyncio.sleep(3)
-            logger.info("🔄 Проверка сохранённых пользователей...")
-            await self.auto_restart_users(app)
-        
-        application.post_init = on_startup
-        
-        logger.info(f"🤖 Бот запущен! (v{BOT_VERSION})")
+        logger.info(f"🤖 Бот запущен!")
         logger.info(f"⚡ Интервал проверки: {CHECK_INTERVAL_ACTIVE}с (активные) / {CHECK_INTERVAL_IDLE}с (неактивные)")
         application.run_polling(
             allowed_updates=Update.ALL_TYPES,

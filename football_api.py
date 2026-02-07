@@ -23,7 +23,7 @@ class FootballAPI:
 
         # Кэш событий матчей
         self.events_cache: Dict[int, Dict] = {}
-        self.cache_duration = 30  # Кэш на 30 секунд (для Pro тарифа с 75k запросами)
+        self.cache_duration = 15  # Кэш на 15 секунд (для Pro тарифа с 75k запросами)
 
         # Сохраняем ВСЕ матчи из последнего запроса (для переиспользования)
         self.all_fixtures_today = []
