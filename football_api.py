@@ -79,50 +79,41 @@ class FootballAPI:
             await self.session.close()
             self.session = None
 
-    async def _make_request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
+    async def _make_request(self, endpoint: str, params: dict = None) -> Optional[Dict]:
         """
-        Выполняет запрос к API
+        ПУБЛИЧНЫЙ метод для выполнения запросов к API
+        (используется аналитикой)
 
         Args:
             endpoint: Конечная точка API
             params: Параметры запроса
 
         Returns:
-            Ответ от API или None в случае ошибки
+            JSON ответ или None
         """
-        await self.init_session()
+        if self.session is None:
+            self.session = aiohttp.ClientSession()
 
         url = f"{self.base_url}/{endpoint}"
 
         try:
-            async with self.session.get(url, params=params) as response:
+            async with self.session.get(url, headers=self.headers, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
 
-                    # Проверяем лимиты API
-                    remaining = response.headers.get('x-ratelimit-requests-remaining')
-                    limit = response.headers.get('x-ratelimit-requests-limit')
-
-                    if remaining and limit:
-                        logger.info(f"📊 API квота: {remaining}/{limit} запросов осталось")
-
-                        # Предупреждение если мало осталось
-                        if int(remaining) < 1000:
-                            logger.warning(f"⚠️ Осталось мало запросов: {remaining}/{limit}")
+                    # Проверка квоты
+                    if 'errors' in data and data['errors']:
+                        if 'requests limit' in str(data['errors']).lower():
+                            logger.error(f"⚠️ Квота API исчерпана!")
+                            return {'quota_exceeded': True}
 
                     return data
-
-                elif response.status == 429:
-                    # Превышен лимит запросов
-                    logger.error("❌ Превышен лимит запросов к API!")
-                    return {'quota_exceeded': True}
-
                 else:
-                    logger.error(f"❌ Ошибка API: {response.status}")
+                    logger.error(f"❌ API error {response.status}: {await response.text()}")
                     return None
 
         except Exception as e:
-            logger.error(f"❌ Ошибка при запросе к API: {e}")
+            logger.error(f"❌ Request error: {e}")
             return None
 
     async def get_live_matches(self) -> List[Dict]:
@@ -195,6 +186,25 @@ class FootballAPI:
         logger.info(f"💾 Возвращаем {len(self.all_fixtures_today)} матчей из кэша (БЕЗ запроса к API)")
 
         return self.all_fixtures_today
+
+    # Метод для получения статистики
+    async def get_match_statistics(self, fixture_id: int) -> Optional[Dict]:
+        """
+        Получает статистику матча
+
+        Args:
+            fixture_id: ID матча
+
+        Returns:
+            Статистика или None
+        """
+        params = {'fixture': fixture_id}
+        data = await self._make_request('fixtures/statistics', params)
+
+        if data and 'quota_exceeded' in data:
+            return None
+
+        return data
 
     async def get_match_events(self, fixture_id: int) -> List[Dict]:
         """
@@ -287,3 +297,4 @@ class FootballAPI:
         except Exception as e:
             logger.error(f"❌ Ошибка при форматировании матча: {e}")
             return {}
+

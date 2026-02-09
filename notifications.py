@@ -133,6 +133,132 @@ class NotificationManager:
         )
         return True
 
+    # Метод для форматирования аналитики
+    def create_goal_notification_with_analytics(self, match_info: Dict, event: Dict,
+                                                mode_name: str, analytics: Dict) -> str:
+        """
+        Создает уведомление о голе С АНАЛИТИКОЙ для режима "70 минута"
+
+        Args:
+            match_info: Информация о матче
+            event: Событие гола
+            mode_name: Название режима
+            analytics: Результаты анализа
+
+        Returns:
+            Отформатированное сообщение
+        """
+        try:
+            from translations import translate_team, translate_league
+        except:
+            def translate_team(name):
+                return name
+
+            def translate_league(name, country=None):
+                return name
+
+        # Базовая информация
+        league = match_info.get('league', 'Неизвестная лига')
+        league_country = match_info.get('league_country', '')
+        home_team = match_info.get('home_team', '?')
+        away_team = match_info.get('away_team', '?')
+        home_goals = match_info.get('home_goals', 0)
+        away_goals = match_info.get('away_goals', 0)
+
+        # Переводы
+        league_ru = translate_league(league, league_country)
+        home_team_ru = translate_team(home_team)
+        away_team_ru = translate_team(away_team)
+
+        # Информация о голе
+        minute = event.get('time', {}).get('elapsed', '?')
+        player_name = event.get('player', {}).get('name', 'Неизвестный игрок')
+        team_name = event.get('team', {}).get('name', '?')
+        team_name_ru = translate_team(team_name)
+        detail = event.get('detail', '').lower()
+
+        # Тип гола
+        if 'penalty' in detail:
+            goal_type = '⚽️ (П)'
+        elif 'own' in detail:
+            goal_type = '⚽️ (АГ)'
+        else:
+            goal_type = '⚽️'
+
+        # Формируем сообщение
+        message = f"{mode_name}\n\n"
+        message += f"🏆 **{league_ru}**\n"
+        message += f"{home_team_ru} **{home_goals}:{away_goals}** {away_team_ru}\n\n"
+        message += f"{goal_type} **{player_name}** ({team_name_ru})\n"
+        message += f"🕐 {minute}'\n\n"
+
+        # АНАЛИТИКА
+        message += f"`{'─' * 40}`\n"
+        message += f"📊 **АНАЛИЗ НА 70-Й МИНУТЕ**\n"
+        message += f"`{'─' * 40}`\n\n"
+
+        # Важность матча
+        importance = analytics.get('importance', {})
+        if importance.get('score', 0) >= 80:
+            message += f"🔔 **{importance.get('category', 'ВАЖНЫЙ МАТЧ').upper()}**\n"
+            message += f"📊 Важность: **{importance.get('score', 50)}%** | {importance.get('reason', '')}\n\n"
+
+        # Прогноз голов
+        goals = analytics.get('goals_forecast', {})
+        losing_team = analytics.get('losing_team', 'home')
+        winning_team = analytics.get('winning_team', 'away')
+
+        losing_name = home_team_ru if losing_team == 'home' else away_team_ru
+        winning_name = away_team_ru if losing_team == 'home' else home_team_ru
+
+        message += f"⚽ **Прогноз голов (70'-90'+):**\n"
+        message += f"├── {home_team_ru}: **{goals.get('home', 0.3)}** гола\n"
+        message += f"├── {away_team_ru}: **{goals.get('away', 0.3)}** гола\n"
+        message += f"└── Тотал > 1.5: **{goals.get('over_1_5_prob', 35)}%**\n\n"
+
+        # Вероятность камбэка
+        comeback = analytics.get('comeback_probability', {})
+        message += f"🎯 **Вероятность камбэка ({losing_name}):**\n"
+
+        factors = comeback.get('factors', {})
+        for factor_name, factor_value in factors.items():
+            # Эмодзи для факторов
+            if int(factor_value.replace('%', '')) >= 70:
+                emoji = '✅'
+            elif int(factor_value.replace('%', '')) >= 50:
+                emoji = '➡️'
+            else:
+                emoji = '⚠️'
+
+            message += f"├── {factor_name}: {factor_value} {emoji}\n"
+
+        prob = comeback.get('probability', 50)
+        emoji = comeback.get('emoji', '✅')
+        message += f"└── **Итоговая вероятность: {prob}%** {emoji}\n\n"
+
+        # Что на кону
+        stakes = analytics.get('stakes', {})
+        if stakes:
+            message += f"🎯 **Что на кону:**\n"
+
+            if 'home_win' in stakes:
+                message += f"✅ Победа {home_team_ru}: {stakes['home_win']}\n"
+            if 'away_win' in stakes:
+                message += f"✅ Победа {away_team_ru}: {stakes['away_win']}\n"
+            if 'draw' in stakes:
+                message += f"✅ Ничья: {stakes['draw']}\n"
+
+            message += f"\n"
+
+        # Прогноз мотивации
+        if importance.get('score', 0) >= 70:
+            message += f"📈 **Прогноз мотивации:**\n"
+            message += f"├── {losing_name}: 95% 🔥\n"
+            message += f"├── {winning_name}: 85% 🔥\n"
+            message += f"└── Общая важность: **{importance.get('category', 'ВЫСОКАЯ').upper()}** ⚠️\n"
+
+        return message
+
     def create_goal_notification(self, match_info: Dict, event: Dict, mode_name: str) -> str:
         """
         Создает текст уведомления о голе

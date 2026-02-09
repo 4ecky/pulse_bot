@@ -89,7 +89,11 @@ class FootballBot:
     def __init__(self):
         self.api = FootballAPI()
         self.notification_manager = NotificationManager()
-        
+
+        # Аналитический движок
+        from analytics import MatchAnalytics
+        self.analytics = MatchAnalytics(self.api)
+
         # JSON файл для сохранения активных пользователей
         self.active_users_file = Path('active_users.json')
         
@@ -312,11 +316,24 @@ class FootballBot:
                 # Проверяем для КАЖДОГО пользователя
                 for user_id in active_users:
                     # Уникальный ключ для этого пользователя и события
-                    team_name = event.get('team', {}).get('name', '')
-                    event_type = event.get('type', '')
-                    detail = event.get('detail', '')
-                    
-                    event_key = (user_id, fixture_id, minute, player_name, team_name, event_type, detail)
+                    event_timestamp = event.get('time', {}).get('elapsed', 0)
+                    event_extra = event.get('time', {}).get('extra', 0)
+                    assist_player = event.get('assist', {}).get('name', 'no_assist')
+                    comments = event.get('comments', '')
+
+                    event_key = (
+                        user_id,
+                        fixture_id,
+                        minute,
+                        event_timestamp,
+                        event_extra,
+                        player_name,
+                        team_name,
+                        event_type,
+                        detail,
+                        assist_player,
+                        comments[:20] if comments else ''  # Первые 20 символов комментария
+                    )
                     
                     # Уже отправляли этому пользователю?
                     if event_key in self.sent_notifications:
@@ -339,21 +356,47 @@ class FootballBot:
                     # Отправляем уведомление
                     if should_notify:
                         try:
-                            notification_text = self.notification_manager.create_goal_notification(
-                                match_info, 
-                                event, 
-                                mode_name
-                            )
-                            
+                            # НОВОЕ: Для режима "70 минута" делаем аналитику
+                            if mode_name == MODE_70_MINUTE['name']:
+                                logger.info(f"🔍 Запускаем аналитику для матча {fixture_id}")
+
+                                analytics_result = await self.analytics.analyze_match_70min(
+                                    match,  # Передаем весь объект матча
+                                    fixture_id
+                                )
+
+                                if analytics_result:
+                                    # Уведомление С аналитикой
+                                    notification_text = self.notification_manager.create_goal_notification_with_analytics(
+                                        match_info,
+                                        event,
+                                        mode_name,
+                                        analytics_result
+                                    )
+                                else:
+                                    # Обычное уведомление (если аналитика не сработала)
+                                    notification_text = self.notification_manager.create_goal_notification(
+                                        match_info,
+                                        event,
+                                        mode_name
+                                    )
+                            else:
+                                # Для других режимов - обычное уведомление
+                                notification_text = self.notification_manager.create_goal_notification(
+                                    match_info,
+                                    event,
+                                    mode_name
+                                )
+
                             await self.application.bot.send_message(
                                 chat_id=user_id,
                                 text=notification_text,
                                 parse_mode='Markdown',
                                 disable_web_page_preview=True
                             )
-                            
+
                             self.sent_notifications.add(event_key)
-                            
+
                             logger.info(
                                 f"⚽ Уведомление → {user_id}: "
                                 f"{match_info.get('home_team', '?')} vs {match_info.get('away_team', '?')}, "
@@ -363,7 +406,7 @@ class FootballBot:
                             logger.error(f"❌ Ошибка отправки уведомления {user_id}: {e}")
                             import traceback
                             logger.error(traceback.format_exc())
-        
+
         except Exception as e:
             logger.error(f"❌ Ошибка обработки матча: {e}")
             import traceback
