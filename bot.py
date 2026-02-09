@@ -274,144 +274,148 @@ class FootballBot:
                 await asyncio.sleep(CHECK_INTERVAL_ACTIVE)
         
         logger.info("⏹ Глобальный цикл проверки завершён")
-    
-    async def process_match_for_all_users(self, match: Dict, active_users: list):
-        """Обрабатывает один матч для ВСЕХ активных пользователей"""
-        try:
-            match_info = self.api.format_match_info(match)
-            fixture_id = match_info.get('fixture_id')
-            
-            if not fixture_id:
-                return
-            
-            # ОДИН запрос событий на всех пользователей!
-            events = await self.api.get_match_events(fixture_id)
-            
-            # Проверка квоты
-            if events and isinstance(events, list) and len(events) > 0:
-                if events[0].get('quota_exceeded'):
-                    for user_id in active_users:
-                        try:
-                            await self.application.bot.send_message(
-                                chat_id=user_id,
-                                text=MESSAGES['quota_exceeded']
-                            )
-                            self.user_states[user_id]['is_running'] = False
-                        except Exception as e:
-                            logger.error(f"❌ Ошибка уведомления {user_id}: {e}")
-                    
-                    self.save_active_users()
-                    self.global_loop_running = False
+
+        async def process_match_for_all_users(self, match: Dict, active_users: list):
+            """Обрабатывает один матч для ВСЕХ активных пользователей"""
+            try:
+                match_info = self.api.format_match_info(match)
+                fixture_id = match_info.get('fixture_id')
+
+                if not fixture_id:
                     return
-            
-            # Обрабатываем события для каждого пользователя
-            for event in events:
-                # Проверяем что это гол
-                if not self.notification_manager.is_goal_event(event):
-                    continue
-                
-                minute = event.get('time', {}).get('elapsed', 0)
-                player_name = event.get('player', {}).get('name', '')
-                
-                # Проверяем для КАЖДОГО пользователя
-                for user_id in active_users:
-                    # Уникальный ключ для этого пользователя и события
+
+                # ОДИН запрос событий на всех пользователей!
+                events = await self.api.get_match_events(fixture_id)
+
+                # Проверка квоты
+                if events and isinstance(events, list) and len(events) > 0:
+                    if events[0].get('quota_exceeded'):
+                        for user_id in active_users:
+                            try:
+                                await self.application.bot.send_message(
+                                    chat_id=user_id,
+                                    text=MESSAGES['quota_exceeded']
+                                )
+                                self.user_states[user_id]['is_running'] = False
+                            except Exception as e:
+                                logger.error(f"❌ Ошибка уведомления {user_id}: {e}")
+
+                        self.save_active_users()
+                        self.global_loop_running = False
+                        return
+
+                # Обрабатываем события для каждого пользователя
+                for event in events:
+                    # Проверяем что это гол
+                    if not self.notification_manager.is_goal_event(event):
+                        continue
+
+                    minute = event.get('time', {}).get('elapsed', 0)
+                    player_name = event.get('player', {}).get('name', '')
+
+                    # ИСПРАВЛЕНИЕ: Объявляем переменные ДО цикла по пользователям
+                    team_name = event.get('team', {}).get('name', '')
+                    event_type = event.get('type', '')
+                    detail = event.get('detail', '')
                     event_timestamp = event.get('time', {}).get('elapsed', 0)
                     event_extra = event.get('time', {}).get('extra', 0)
                     assist_player = event.get('assist', {}).get('name', 'no_assist')
                     comments = event.get('comments', '')
 
-                    event_key = (
-                        user_id,
-                        fixture_id,
-                        minute,
-                        event_timestamp,
-                        event_extra,
-                        player_name,
-                        team_name,
-                        event_type,
-                        detail,
-                        assist_player,
-                        comments[:20] if comments else ''  # Первые 20 символов комментария
-                    )
-                    
-                    # Уже отправляли этому пользователю?
-                    if event_key in self.sent_notifications:
-                        continue
-                    
-                    # Определяем нужно ли уведомление
-                    should_notify = False
-                    mode_name = ""
-                    
-                    # Режим "70 минута" - только первый гол на 69-70 минуте
-                    if self.notification_manager.should_notify_70_minute_mode(minute, match_info, event):
-                        should_notify = True
-                        mode_name = MODE_70_MINUTE['name']
-                    
-                    # Режим "Пенальти 2-10 мин" - пенальти на 2-10 минуте
-                    elif self.notification_manager.should_notify_penalty_early_mode(minute, event):
-                        should_notify = True
-                        mode_name = MODE_PENALTY_EARLY['name']
-                    
-                    # Отправляем уведомление
-                    if should_notify:
-                        try:
-                            # НОВОЕ: Для режима "70 минута" делаем аналитику
-                            if mode_name == MODE_70_MINUTE['name']:
-                                logger.info(f"🔍 Запускаем аналитику для матча {fixture_id}")
+                    # Проверяем для КАЖДОГО пользователя
+                    for user_id in active_users:
+                        # Создаём МАКСИМАЛЬНО уникальный ключ для предотвращения дублей
+                        event_key = (
+                            user_id,
+                            fixture_id,
+                            minute,
+                            event_timestamp,
+                            event_extra,
+                            player_name,
+                            team_name,
+                            event_type,
+                            detail,
+                            assist_player,
+                            comments[:20] if comments else ''
+                        )
 
-                                analytics_result = await self.analytics.analyze_match_70min(
-                                    match,  # Передаем весь объект матча
-                                    fixture_id
-                                )
+                        # Уже отправляли этому пользователю?
+                        if event_key in self.sent_notifications:
+                            continue
 
-                                if analytics_result:
-                                    # Уведомление С аналитикой
-                                    notification_text = self.notification_manager.create_goal_notification_with_analytics(
-                                        match_info,
-                                        event,
-                                        mode_name,
-                                        analytics_result
+                        # Определяем нужно ли уведомление
+                        should_notify = False
+                        mode_name = ""
+
+                        # Режим "70 минута" - только первый гол на 69-70 минуте
+                        if self.notification_manager.should_notify_70_minute_mode(minute, match_info, event):
+                            should_notify = True
+                            mode_name = MODE_70_MINUTE['name']
+
+                        # Режим "Пенальти 2-10 мин" - пенальти на 2-10 минуте
+                        elif self.notification_manager.should_notify_penalty_early_mode(minute, event):
+                            should_notify = True
+                            mode_name = MODE_PENALTY_EARLY['name']
+
+                        # Отправляем уведомление
+                        if should_notify:
+                            try:
+                                # НОВОЕ: Для режима "70 минута" делаем аналитику
+                                if mode_name == MODE_70_MINUTE['name']:
+                                    logger.info(f"🔍 Запускаем аналитику для матча {fixture_id}")
+
+                                    analytics_result = await self.analytics.analyze_match_70min(
+                                        match,  # Передаем весь объект матча
+                                        fixture_id
                                     )
+
+                                    if analytics_result:
+                                        # Уведомление С аналитикой
+                                        notification_text = self.notification_manager.create_goal_notification_with_analytics(
+                                            match_info,
+                                            event,
+                                            mode_name,
+                                            analytics_result
+                                        )
+                                    else:
+                                        # Обычное уведомление (если аналитика не сработала)
+                                        notification_text = self.notification_manager.create_goal_notification(
+                                            match_info,
+                                            event,
+                                            mode_name
+                                        )
                                 else:
-                                    # Обычное уведомление (если аналитика не сработала)
+                                    # Для других режимов - обычное уведомление
                                     notification_text = self.notification_manager.create_goal_notification(
                                         match_info,
                                         event,
                                         mode_name
                                     )
-                            else:
-                                # Для других режимов - обычное уведомление
-                                notification_text = self.notification_manager.create_goal_notification(
-                                    match_info,
-                                    event,
-                                    mode_name
+
+                                await self.application.bot.send_message(
+                                    chat_id=user_id,
+                                    text=notification_text,
+                                    parse_mode='Markdown',
+                                    disable_web_page_preview=True
                                 )
 
-                            await self.application.bot.send_message(
-                                chat_id=user_id,
-                                text=notification_text,
-                                parse_mode='Markdown',
-                                disable_web_page_preview=True
-                            )
+                                self.sent_notifications.add(event_key)
 
-                            self.sent_notifications.add(event_key)
+                                logger.info(
+                                    f"⚽ Уведомление → {user_id}: "
+                                    f"{match_info.get('home_team', '?')} vs {match_info.get('away_team', '?')}, "
+                                    f"мин {minute}, режим: {mode_name}"
+                                )
+                            except Exception as e:
+                                logger.error(f"❌ Ошибка отправки уведомления {user_id}: {e}")
+                                import traceback
+                                logger.error(traceback.format_exc())
 
-                            logger.info(
-                                f"⚽ Уведомление → {user_id}: "
-                                f"{match_info.get('home_team', '?')} vs {match_info.get('away_team', '?')}, "
-                                f"мин {minute}, режим: {mode_name}"
-                            )
-                        except Exception as e:
-                            logger.error(f"❌ Ошибка отправки уведомления {user_id}: {e}")
-                            import traceback
-                            logger.error(traceback.format_exc())
+            except Exception as e:
+                logger.error(f"❌ Ошибка обработки матча: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
 
-        except Exception as e:
-            logger.error(f"❌ Ошибка обработки матча: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-    
     @private_access_required
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
